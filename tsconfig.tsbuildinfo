@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts","./src/components/profilemenu.tsx","./src/components/protectedroute.tsx","./src/components/toolcard.tsx","./src/components/icons.tsx","./src/lib/msalconfig.ts","./src/lib/profiles.ts","./src/lib/supabaseclient.ts","./src/pages/home.tsx","./src/pages/login.tsx","./src/tools/registry.ts"],"version":"5.9.3"}
