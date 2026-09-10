@@ -43,3 +43,25 @@ export function queryParam(
   const value = req.query[name]
   return Array.isArray(value) ? value[0] : value
 }
+
+/**
+ * The origin the client actually reached this function on, e.g.
+ * `https://app.example.com`. Behind Vercel's proxy the real host/proto are in
+ * the `x-forwarded-*` headers. Used to anchor the Procore OAuth redirect URI.
+ */
+export function requestOrigin(req: VercelRequest): string | null {
+  const host =
+    firstHeader(req.headers['x-forwarded-host']) ?? firstHeader(req.headers.host)
+  if (!host) return null
+  const proto =
+    firstHeader(req.headers['x-forwarded-proto']) ??
+    (host.startsWith('localhost') || host.startsWith('127.0.0.1')
+      ? 'http'
+      : 'https')
+  return `${proto}://${host}`
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0]
+  return value?.split(',')[0]?.trim()
+}

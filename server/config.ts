@@ -44,9 +44,22 @@ export function getServerConfig() {
 
 export type ServerConfig = ReturnType<typeof getServerConfig>
 
-/** Where the browser app is served — used to build post-OAuth redirect URLs. */
-export function getAppBaseUrl(): string {
-  return optional('APP_BASE_URL', 'http://localhost:5173').replace(/\/$/, '')
+/**
+ * Where the browser app is served — used to build the Procore OAuth
+ * redirect/return URLs. Resolution order:
+ *   1. `APP_BASE_URL` env var (set this on Vercel to your stable domain), then
+ *   2. the origin of the incoming request (`https://<host>`), which the API
+ *      adapters derive from `x-forwarded-proto` / `host`, then
+ *   3. localhost, for safety.
+ *
+ * (2) means it usually works on Vercel even if you forget `APP_BASE_URL` —
+ * but you still must register the exact callback URL with Procore.
+ */
+export function resolveAppBaseUrl(requestOrigin?: string | null): string {
+  const fromEnv = process.env.APP_BASE_URL
+  if (fromEnv) return fromEnv.replace(/\/$/, '')
+  if (requestOrigin) return requestOrigin.replace(/\/$/, '')
+  return 'http://localhost:5173'
 }
 
 /**
@@ -61,7 +74,7 @@ export function isProcoreConfigured(): boolean {
   )
 }
 
-export function getProcoreConfig() {
+export function getProcoreConfig(requestOrigin?: string | null) {
   const authBase = optional(
     'PROCORE_AUTH_BASE_URL',
     'https://login.procore.com',
@@ -74,9 +87,13 @@ export function getProcoreConfig() {
   return {
     clientId: required('PROCORE_CLIENT_ID'),
     clientSecret: required('PROCORE_CLIENT_SECRET'),
+    // Sent to Procore in BOTH the authorize step and the token exchange — the
+    // two must be byte-identical, and this exact string must be registered on
+    // the Procore app. `PROCORE_REDIRECT_URI` overrides; otherwise it's derived
+    // from the request origin (or APP_BASE_URL).
     redirectUri: optional(
       'PROCORE_REDIRECT_URI',
-      `${getAppBaseUrl()}/api/procore/callback`,
+      `${resolveAppBaseUrl(requestOrigin)}/api/procore/callback`,
     ),
     /** Signs the short-lived OAuth `state` (CSRF + carries the profile id). */
     stateSecret: required('PROCORE_OAUTH_STATE_SECRET'),

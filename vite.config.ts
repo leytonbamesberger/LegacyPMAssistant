@@ -80,17 +80,23 @@ function devApiPlugin(env: Record<string, string>): Plugin {
         res: ServerResponse,
       ) {
         const mod = await server.ssrLoadModule(route.module)
-        const fn = mod[route.export] as (arg: unknown) => Promise<ApiResult>
+        const fn = mod[route.export] as (
+          arg: unknown,
+          origin?: string | null,
+        ) => Promise<ApiResult>
+
+        const host = req.headers.host ?? 'localhost:5173'
+        const origin = `http://${host}`
 
         let arg: unknown
         if (route.arg === 'auth') {
           arg = req.headers.authorization
         } else {
-          const url = new URL(req.url ?? '/', 'http://localhost')
+          const url = new URL(req.url ?? '/', origin)
           arg = Object.fromEntries(url.searchParams)
         }
 
-        writeResult(res, await fn(arg))
+        writeResult(res, await fn(arg, origin))
       }
     },
   }

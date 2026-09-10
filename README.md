@@ -89,12 +89,26 @@ side) can. This is the security boundary — see the comment block in
 ## Procore connection
 
 1. Create an app at [developers.procore.com](https://developers.procore.com) →
-   **OAuth Credentials**. Add redirect URIs for every origin you run on:
-   `http://localhost:5173/api/procore/callback` and
-   `https://<your-vercel-domain>/api/procore/callback`.
+   **OAuth Credentials**. Add a redirect URI for **every** origin you run on —
+   Procore requires an exact match:
+   - `http://localhost:5173/api/procore/callback`
+   - `https://<your-vercel-domain>/api/procore/callback`
 2. Put `PROCORE_CLIENT_ID`, `PROCORE_CLIENT_SECRET`, and a self-generated
-   `PROCORE_OAUTH_STATE_SECRET` in `.env.local` (and Vercel).
-3. In the app: profile menu → **Connect Procore**.
+   `PROCORE_OAUTH_STATE_SECRET` in `.env.local` and in the Vercel project.
+3. Set `APP_BASE_URL` in Vercel to your production URL (see below).
+4. In the app: profile menu → **Connect Procore**.
+
+### The redirect URI
+
+`server/config.ts` builds the OAuth `redirect_uri` (used identically in the
+authorize step and the token exchange) as `<base>/api/procore/callback`, where
+`<base>` is, in order: `APP_BASE_URL`, else the origin of the incoming request
+(`x-forwarded-proto`/`host`), else `http://localhost:5173`.
+
+So on Vercel a plain production deploy works even without `APP_BASE_URL` — but
+set it anyway (to the stable production URL) so **preview** deployments send a
+`redirect_uri` Procore recognises instead of the throwaway preview hostname.
+`APP_BASE_URL` is not a secret; a normal Vercel env var is fine.
 
 Flow: `POST /api/procore/authorize` (MSAL-authenticated) returns the Procore
 consent URL carrying a signed `state` (CSRF + the profile id) → Procore redirects
