@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMsal } from '@azure/msal-react'
+import { ProcoreConnectionItem } from './ProcoreConnectionItem'
 
 /**
  * Top-right profile element for the Home header: circular avatar placeholder +
  * display name from the Microsoft account, with a dropdown.
  *
- * Dropdown items for this pass:
- * - "Connect Procore" — disabled placeholder, no-op (wired up later).
+ * Dropdown items:
+ * - Procore connection (connect / disconnect / unavailable) — see
+ *   `ProcoreConnectionItem`.
  * - "Sign out" — MSAL logout redirect.
  */
 export function ProfileMenu() {
@@ -71,16 +73,9 @@ export function ProfileMenu() {
             )}
           </div>
 
-          <button
-            type="button"
-            disabled
-            title="Procore connection will be enabled in a later step."
-            className="flex w-full cursor-not-allowed items-center justify-between px-3 py-2 text-sm text-legacy-blue-light/60"
-            role="menuitem"
-          >
-            Connect Procore
-            <span className="text-[10px] uppercase tracking-wide">Soon</span>
-          </button>
+          <ProcoreConnectionItem />
+
+          <div className="my-1 border-t border-legacy-blue-light/15" />
 
           <button
             type="button"

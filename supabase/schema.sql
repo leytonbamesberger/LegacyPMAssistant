@@ -10,17 +10,18 @@ create table profiles (
   created_at timestamptz default now()
 );
 
--- procore_connections: placeholder for per-user Procore OAuth tokens (not wired up yet)
+-- procore_connections: per-user Procore OAuth tokens.
+-- Written only by /api/procore/callback (service-role). One row per profile.
+-- Tokens are stored as-is; access is limited to the service-role key (RLS
+-- below). Encrypting at rest is a reasonable future hardening step.
 create table procore_connections (
   id uuid primary key default gen_random_uuid(),
-  profile_id uuid references profiles(id) not null,
+  profile_id uuid references profiles(id) not null unique,
   access_token text,
   refresh_token text,
   expires_at timestamptz,
   connected_at timestamptz default now()
 );
-
-create index procore_connections_profile_id_idx on procore_connections (profile_id);
 
 -- ---------------------------------------------------------------------------
 -- Row Level Security
