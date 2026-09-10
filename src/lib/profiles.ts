@@ -1,5 +1,5 @@
-import type { AccountInfo } from '@azure/msal-browser'
-import { supabase, isSupabaseConfigured } from './supabaseClient'
+import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
+import { loginRequest } from './msalConfig'
 
 export interface Profile {
   id: string
@@ -10,64 +10,50 @@ export interface Profile {
 }
 
 /**
- * Pull the stable identifiers out of an MSAL account.
- * `localAccountId` is the Azure AD object ID (oid claim) — stable per user
- * per tenant, so it's our key into the `profiles` table.
- */
-function identityFromAccount(account: AccountInfo) {
-  const claims = (account.idTokenClaims ?? {}) as Record<string, unknown>
-  return {
-    azureOid: account.localAccountId,
-    email:
-      account.username ||
-      (typeof claims.email === 'string' ? claims.email : '') ||
-      (typeof claims.preferred_username === 'string'
-        ? claims.preferred_username
-        : ''),
-    displayName:
-      account.name ??
-      (typeof claims.name === 'string' ? claims.name : null),
-  }
-}
-
-/**
  * Ensure a `profiles` row exists for the signed-in Microsoft account.
- * Called once after login. Returns the profile, or null if Supabase isn't
- * reachable / configured (the app still works as a shell without it).
+ *
+ * The browser never writes to Supabase directly. It sends its Microsoft ID
+ * token to `POST /api/profile`, which verifies the token server-side and does
+ * the upsert with the Supabase service-role key. See `server/profileHandler.ts`.
+ *
+ * Returns the profile, or null if the token couldn't be acquired or the API
+ * call failed (the app shell still works without it).
  */
 export async function ensureProfile(
+  instance: IPublicClientApplication,
   account: AccountInfo,
 ): Promise<Profile | null> {
-  if (!isSupabaseConfigured) {
-    console.warn('[profiles] Supabase not configured — skipping profile sync.')
+  let idToken: string
+  try {
+    const result = await instance.acquireTokenSilent({
+      scopes: loginRequest.scopes,
+      account,
+    })
+    idToken = result.idToken
+  } catch (err) {
+    console.error('[profiles] could not acquire ID token:', err)
     return null
   }
 
-  const { azureOid, email, displayName } = identityFromAccount(account)
-
-  const { data: existing, error: selectError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('azure_oid', azureOid)
-    .maybeSingle()
-
-  if (selectError) {
-    console.error('[profiles] lookup failed:', selectError.message)
+  let res: Response
+  try {
+    res = await fetch('/api/profile', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${idToken}` },
+    })
+  } catch (err) {
+    console.error('[profiles] /api/profile request failed:', err)
     return null
   }
 
-  if (existing) return existing as Profile
-
-  const { data: created, error: insertError } = await supabase
-    .from('profiles')
-    .insert({ azure_oid: azureOid, email, display_name: displayName })
-    .select()
-    .single()
-
-  if (insertError) {
-    console.error('[profiles] create failed:', insertError.message)
+  if (!res.ok) {
+    console.error(
+      `[profiles] /api/profile returned ${res.status}:`,
+      await res.text().catch(() => '<no body>'),
+    )
     return null
   }
 
-  return created as Profile
+  const { profile } = (await res.json()) as { profile: Profile }
+  return profile
 }

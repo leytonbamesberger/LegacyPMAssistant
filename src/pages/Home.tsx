@@ -6,14 +6,14 @@ import { TOOLS } from '../tools/registry'
 import { ensureProfile } from '../lib/profiles'
 
 export function Home() {
-  const { accounts } = useMsal()
+  const { instance, accounts } = useMsal()
   const account = accounts[0]
 
-  // Sync the Supabase `profiles` row once we have an authenticated account.
+  // Provision the `profiles` row (via /api/profile) once we have an account.
   useEffect(() => {
     if (!account) return
-    void ensureProfile(account)
-  }, [account])
+    void ensureProfile(instance, account)
+  }, [instance, account])
 
   return (
     <div className="flex min-h-full flex-col bg-white">

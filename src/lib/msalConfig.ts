@@ -26,7 +26,12 @@ export const msalConfig: Configuration = {
     authority: `https://login.microsoftonline.com/${tenantId ?? ''}`,
     knownAuthorities: [],
     redirectUri,
-    postLogoutRedirectUri: '/login',
+    postLogoutRedirectUri: `${window.location.origin}/login`,
+    // SPA: process the auth response on the redirect URI page and stay there.
+    // With the default (true), MSAL does a hard navigation back to the page
+    // that started login, which races token caching and can dump the user
+    // back on /login with a stuck `interaction_in_progress` flag.
+    navigateToLoginRequestUrl: false,
   },
   cache: {
     cacheLocation: 'localStorage',
@@ -34,10 +39,12 @@ export const msalConfig: Configuration = {
   },
   system: {
     loggerOptions: {
-      logLevel: LogLevel.Warning,
+      logLevel: import.meta.env.DEV ? LogLevel.Info : LogLevel.Warning,
       loggerCallback: (level, message, containsPii) => {
         if (containsPii) return
         if (level === LogLevel.Error) console.error('[msal]', message)
+        else if (level === LogLevel.Warning) console.warn('[msal]', message)
+        else if (import.meta.env.DEV) console.info('[msal]', message)
       },
     },
   },

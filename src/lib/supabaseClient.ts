@@ -1,5 +1,17 @@
 import { createClient } from '@supabase/supabase-js'
 
+/**
+ * Browser Supabase client (anon key).
+ *
+ * NOT used for profiles or any sensitive table — those go through
+ * `POST /api/profile`, which uses the service-role key server-side. The
+ * `profiles` / `procore_connections` tables have RLS on with no anon policies,
+ * so this client cannot read or write them.
+ *
+ * Kept for future *public*, RLS-protected read-only data (e.g. a shared
+ * reference list). Safe to delete if that never materialises.
+ */
+
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 

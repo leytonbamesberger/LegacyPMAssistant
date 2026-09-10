@@ -25,17 +25,22 @@ create index procore_connections_profile_id_idx on procore_connections (profile_
 -- ---------------------------------------------------------------------------
 -- Row Level Security
 --
--- Auth is via MSAL (Microsoft), not Supabase Auth, so there is no Supabase JWT
--- carrying the user's identity yet. For the POC the app uses the anon key and
--- these tables are reached directly from the client.
+-- Auth is via MSAL (Microsoft), not Supabase Auth, so the browser has no
+-- Supabase identity. The browser therefore does NOT touch these tables at all.
 --
--- Before this leaves POC status, lock these down — options:
---   * Move profile upsert + token storage behind an Edge Function / server
---     route that validates the MSAL ID token, and deny direct client access.
---   * Or mint a Supabase JWT from the verified Azure identity and write RLS
---     policies keyed on azure_oid.
+-- Writes go through `POST /api/profile` (see server/profileHandler.ts), which:
+--   1. verifies the caller's Microsoft ID token (issuer = our tenant,
+--      audience = our client ID, signature via Microsoft's JWKS), then
+--   2. upserts using the Supabase service-role key, which bypasses RLS.
 --
--- Enabling RLS with no policies (deny-all) until then:
--- alter table profiles enable row level security;
--- alter table procore_connections enable row level security;
+-- So RLS is enabled with NO policies: the public anon key (which ships in the
+-- JS bundle) can neither read nor write these tables. Only the service-role
+-- key — server-side only, never exposed to the browser — can.
+
+alter table profiles enable row level security;
+alter table procore_connections enable row level security;
+
+-- If you later need the browser to READ some non-sensitive public data, add a
+-- narrow SELECT policy to that specific table only, e.g.:
+--   create policy "public read" on <table> for select to anon using (true);
 -- ---------------------------------------------------------------------------
