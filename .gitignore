@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 *.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+.repro*
 
 # Vercel
 .vercel
