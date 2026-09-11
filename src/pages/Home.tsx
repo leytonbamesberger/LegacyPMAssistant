@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMsal } from '@azure/msal-react'
 import { useSearchParams } from 'react-router-dom'
-import { ProfileMenu } from '../components/ProfileMenu'
 import { ToolCard } from '../components/ToolCard'
 import { TOOLS } from '../tools/registry'
 import { ensureProfile } from '../lib/profiles'
@@ -37,16 +36,7 @@ export function Home() {
   }, [searchParams, setSearchParams])
 
   return (
-    <div className="flex min-h-full flex-col bg-white">
-      <header className="bg-legacy-blue-dark">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
-          <span className="text-lg font-semibold tracking-tight text-white">
-            Legacy PM Assistant
-          </span>
-          <ProfileMenu />
-        </div>
-      </header>
-
+    <>
       {notice && (
         <div
           className={`border-b px-6 py-2.5 text-sm ${
@@ -55,7 +45,7 @@ export function Home() {
               : 'border-legacy-red/30 bg-legacy-red/5 text-legacy-red'
           }`}
         >
-          <div className="mx-auto flex max-w-6xl items-center justify-between">
+          <div className="flex items-center justify-between">
             <span>{notice.text}</span>
             <button
               type="button"
@@ -68,7 +58,7 @@ export function Home() {
         </div>
       )}
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">
+      <div className="mx-auto w-full max-w-6xl px-6 py-10">
         <h1 className="text-xl font-semibold text-legacy-blue-dark">Tools</h1>
         <p className="mt-1 text-sm text-legacy-blue-light">
           Select a tool to get started.
@@ -79,7 +69,7 @@ export function Home() {
             <ToolCard key={tool.key} tool={tool} />
           ))}
         </div>
-      </main>
-    </div>
+      </div>
+    </>
   )
 }

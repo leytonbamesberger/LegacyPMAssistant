@@ -5,7 +5,7 @@ import {
   isProcoreConfigured,
   missingProcoreVars,
 } from './config.js'
-import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth.js'
+import { getSupabaseAdmin, resolveProfile } from './auth.js'
 import {
   buildAuthorizeUrl,
   deleteConnection,
@@ -36,15 +36,11 @@ export async function handleProcoreAuthorize(
     }
   }
 
-  const verified = await verifyMicrosoftToken(authorizationHeader)
-  if ('error' in verified) return verified.error
-
-  // Ensure the profile exists so the callback has a row to attach to.
-  const profileResult = await upsertProfile(getSupabaseAdmin(), verified.claims)
-  if ('error' in profileResult) return profileResult.error
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
 
   const config = getProcoreConfig(requestOrigin)
-  const state = await signOAuthState(profileResult.profile.id, config)
+  const state = await signOAuthState(resolved.profileId, config)
   return { status: 200, json: { url: buildAuthorizeUrl(state, config) } }
 }
 
@@ -99,12 +95,10 @@ export async function handleProcoreCallback(
 export async function handleProcoreStatus(
   authorizationHeader: string | undefined,
 ): Promise<ApiResult> {
-  const configured = isProcoreConfigured()
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
 
-  const verified = await verifyMicrosoftToken(authorizationHeader)
-  if ('error' in verified) return verified.error
-
-  if (!configured) {
+  if (!isProcoreConfigured()) {
     return {
       status: 200,
       json: {
@@ -119,11 +113,7 @@ export async function handleProcoreStatus(
     }
   }
 
-  const admin = getSupabaseAdmin()
-  const profileResult = await upsertProfile(admin, verified.claims)
-  if ('error' in profileResult) return profileResult.error
-
-  const connection = await getConnection(admin, profileResult.profile.id)
+  const connection = await getConnection(resolved.admin, resolved.profileId)
 
   return {
     status: 200,
@@ -142,13 +132,9 @@ export async function handleProcoreStatus(
 export async function handleProcoreDisconnect(
   authorizationHeader: string | undefined,
 ): Promise<ApiResult> {
-  const verified = await verifyMicrosoftToken(authorizationHeader)
-  if ('error' in verified) return verified.error
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
 
-  const admin = getSupabaseAdmin()
-  const profileResult = await upsertProfile(admin, verified.claims)
-  if ('error' in profileResult) return profileResult.error
-
-  await deleteConnection(admin, profileResult.profile.id)
+  await deleteConnection(resolved.admin, resolved.profileId)
   return { status: 200, json: { connected: false } }
 }

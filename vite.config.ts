@@ -16,8 +16,8 @@ interface DevRoute {
   method: 'GET' | 'POST'
   module: string
   export: string
-  /** How to call the handler. */
-  arg: 'auth' | 'query'
+  /** How to call the handler: bearer token, parsed query object, or (token, JSON body). */
+  arg: 'auth' | 'query' | 'authAndBody'
 }
 
 const ROUTES: DevRoute[] = [
@@ -26,6 +26,12 @@ const ROUTES: DevRoute[] = [
   { path: '/api/procore/callback', method: 'GET', module: '/server/procoreRoutes.ts', export: 'handleProcoreCallback', arg: 'query' },
   { path: '/api/procore/status', method: 'GET', module: '/server/procoreRoutes.ts', export: 'handleProcoreStatus', arg: 'auth' },
   { path: '/api/procore/disconnect', method: 'POST', module: '/server/procoreRoutes.ts', export: 'handleProcoreDisconnect', arg: 'auth' },
+  { path: '/api/projects/sync', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsSync', arg: 'auth' },
+  { path: '/api/projects/star', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsStar', arg: 'authAndBody' },
+  // connect mounts by path *prefix*, so this one also matches /api/projects/sync
+  // and /api/projects/star — harmless, since every route's method check below
+  // calls next() on a mismatch, letting the request fall through to the right one.
+  { path: '/api/projects', method: 'GET', module: '/server/projectRoutes.ts', export: 'handleProjectsList', arg: 'auth' },
 ]
 
 // Non-secret URL vars have VITE_ fallbacks; forward both so `server/config.ts`
@@ -80,13 +86,16 @@ function devApiPlugin(env: Record<string, string>): Plugin {
         res: ServerResponse,
       ) {
         const mod = await server.ssrLoadModule(route.module)
-        const fn = mod[route.export] as (
-          arg: unknown,
-          origin?: string | null,
-        ) => Promise<ApiResult>
+        const fn = mod[route.export] as (...args: unknown[]) => Promise<ApiResult>
 
         const host = req.headers.host ?? 'localhost:5173'
         const origin = `http://${host}`
+
+        if (route.arg === 'authAndBody') {
+          const body = await readJsonBody(req)
+          writeResult(res, await fn(req.headers.authorization, body))
+          return
+        }
 
         let arg: unknown
         if (route.arg === 'auth') {
@@ -99,6 +108,20 @@ function devApiPlugin(env: Record<string, string>): Plugin {
         writeResult(res, await fn(arg, origin))
       }
     },
+  }
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = []
+  for await (const chunk of req) {
+    chunks.push(chunk as Buffer)
+  }
+  const raw = Buffer.concat(chunks).toString('utf8')
+  if (!raw) return {}
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {}
   }
 }
 

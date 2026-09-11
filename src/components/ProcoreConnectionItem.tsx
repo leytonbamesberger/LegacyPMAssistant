@@ -55,14 +55,22 @@ export function ProcoreConnectionItem() {
   }
 
   if (!status || !status.configured) {
+    // These are two different failures — don't collapse them into one message.
+    // "Could not check" means the /api/procore/status call itself never got a
+    // real response back (see the console for the [api] log with the reason).
+    // "Missing on the server" means the call succeeded and named the gap.
     const missing = status?.missingVars
-    const title = missing?.length
-      ? `Missing on the server: ${missing.join(', ')}`
-      : 'Procore isn’t configured on the server yet.'
+    const title = !status
+      ? 'Could not check Procore status — see the browser console for [api] errors.'
+      : missing?.length
+        ? `Missing on the server: ${missing.join(', ')}`
+        : 'Server says Procore is unconfigured but did not say why — check /api/procore/status directly.'
     return (
       <Row muted title={title}>
         <span>Connect Procore</span>
-        <span className="text-[10px] uppercase tracking-wide">Unavailable</span>
+        <span className="text-[10px] uppercase tracking-wide">
+          {!status ? 'Check failed' : 'Unavailable'}
+        </span>
       </Row>
     )
   }

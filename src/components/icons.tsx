@@ -68,3 +68,51 @@ export function RatingIcon(props: SVGProps<SVGSVGElement>) {
     </svg>
   )
 }
+
+export function ChevronIcon({
+  direction = 'right',
+  ...props
+}: SVGProps<SVGSVGElement> & { direction?: 'left' | 'right' }) {
+  return (
+    <svg {...base} {...props}>
+      <path d={direction === 'left' ? 'M15 6l-6 6 6 6' : 'M9 6l6 6-6 6'} />
+    </svg>
+  )
+}
+
+export function RefreshIcon({
+  spinning,
+  className,
+  ...props
+}: SVGProps<SVGSVGElement> & { spinning?: boolean }) {
+  return (
+    <svg
+      {...base}
+      {...props}
+      className={spinning ? `animate-spin ${className ?? ''}` : className}
+    >
+      <path d="M3 12a9 9 0 0 1 15.5-6.3M21 12a9 9 0 0 1-15.5 6.3" />
+      <path d="M18 3v4h-4M6 21v-4h4" />
+    </svg>
+  )
+}
+
+export function StarIcon({
+  filled,
+  ...props
+}: SVGProps<SVGSVGElement> & { filled?: boolean }) {
+  return (
+    <svg {...base} {...props} fill={filled ? 'currentColor' : 'none'}>
+      <path d="m12 4 2.3 4.7 5.2.8-3.8 3.7.9 5.2-4.6-2.4-4.6 2.4.9-5.2L4 9.5l5.2-.8L12 4Z" />
+    </svg>
+  )
+}
+
+export function SearchIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-3.5-3.5" />
+    </svg>
+  )
+}

@@ -124,3 +124,24 @@ export async function upsertProfile(
 
   return { profile: data as ProfileRecord }
 }
+
+/**
+ * The common first step of every authenticated `/api` handler: verify the
+ * Microsoft token and ensure a `profiles` row exists for it. Returns the
+ * profile id and a ready-to-use Supabase admin client, or an `ApiResult` to
+ * return as-is.
+ */
+export async function resolveProfile(
+  authorizationHeader: string | undefined,
+): Promise<
+  { admin: SupabaseClient; profileId: string } | { error: ApiResult }
+> {
+  const verified = await verifyMicrosoftToken(authorizationHeader)
+  if ('error' in verified) return verified
+
+  const admin = getSupabaseAdmin()
+  const result = await upsertProfile(admin, verified.claims)
+  if ('error' in result) return result
+
+  return { admin, profileId: result.profile.id }
+}

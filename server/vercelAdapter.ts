@@ -31,6 +31,8 @@ interface MinimalRequest {
   url?: string
   headers: Record<string, string | string[] | undefined>
   query: Record<string, string | string[] | undefined>
+  /** Vercel parses this automatically for `content-type: application/json`. */
+  body?: unknown
 }
 
 interface MinimalResponse {

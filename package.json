@@ -13,6 +13,7 @@
     "@azure/msal-browser": "^3.28.1",
     "@azure/msal-react": "^2.2.0",
     "@supabase/supabase-js": "^2.45.4",
+    "fuse.js": "^7.5.0",
     "jose": "^5.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

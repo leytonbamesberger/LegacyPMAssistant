@@ -76,15 +76,23 @@ the Supabase SQL editor — it is **not** run automatically.
   Provisioned by `/api/profile` on login.
 - `procore_connections` — one row per profile (`unique (profile_id)`), holding
   the user's Procore OAuth tokens. Written only by `/api/procore/callback`.
+- `projects` — cached mirror of Procore projects, shared across all users (not
+  per-profile). Refreshed by `/api/projects/sync` using each caller's own
+  Procore token. Rows not seen in the latest sync are soft-deleted
+  (`is_active = false`), never hard-deleted.
+- `user_starred_projects` — join table: which projects a profile has starred.
 
-**RLS:** both tables have Row Level Security **on with no policies**. The public
-anon key can neither read nor write them; only the service-role key (server
-side) can. This is the security boundary — see the comment block in
-`schema.sql`.
+**RLS:** every table has Row Level Security **on with no policies**. The public
+anon key can neither read nor write any of them; only the service-role key
+(server side) can. This is the security boundary — see the comment block in
+`schema.sql`. (There is no Supabase-Auth `authenticated` role in this app —
+auth is MSAL — so "authenticated users can read" is implemented as "verified-
+Microsoft-token requests through our own `/api` routes," not as an RLS policy.)
 
 **Migrations** (run once each, in order, against an existing project):
 [`001_lock_down_profiles_rls.sql`](supabase/migrations/001_lock_down_profiles_rls.sql),
-[`002_procore_connections_unique.sql`](supabase/migrations/002_procore_connections_unique.sql).
+[`002_procore_connections_unique.sql`](supabase/migrations/002_procore_connections_unique.sql),
+[`003_projects_and_starred.sql`](supabase/migrations/003_projects_and_starred.sql).
 
 ## Procore connection
 
@@ -118,6 +126,53 @@ upserts `procore_connections` → user returns to `/home?procore=connected`.
 persists Procore's rotated refresh token) — that's the entry point for the
 Procore-backed tools when they're built.
 
+## Project selector (sidebar)
+
+Every protected page is wrapped (by `ProtectedRoute`) in `UnsavedWorkProvider` →
+`ProjectProvider` → `AppShell`, so the header + left sidebar and the project
+context are available everywhere without each page wiring them up.
+
+- **`ProjectContext`** (`src/contexts/ProjectContext.tsx`) holds the project
+  list, the selected project (persisted in `localStorage`), and sync state.
+  On mount it loads the cached list from `GET /api/projects` immediately, then
+  fires `POST /api/projects/sync` in the background — the UI never blocks on
+  Procore. `refreshProjects()` is the same call, exposed for the sidebar's
+  manual refresh button.
+- **`server/projects.ts`** does the actual sync: list the caller's Procore
+  companies, list each company's projects (their own OAuth token, refreshed
+  via `getValidAccessToken()` if needed), upsert into `projects`, then
+  soft-delete anything not seen. A user with no Procore connection, or a dead
+  refresh token, gets `syncOk: false` + a message — never a crash — and the
+  UI keeps showing cached data with a small red dot on the refresh icon.
+- Procore's exact field names for a project's "active" status aren't fully
+  pinned down from public docs — `pickJobNumber`/`pickActive`/`pickName` in
+  `server/projects.ts` read several plausible field names defensively. If a
+  synced project shows a blank job number, check a raw Procore project object
+  in the logs and adjust the candidate list there.
+- **`UnsavedWorkContext`** (`src/contexts/UnsavedWorkContext.tsx`) is a bare
+  `hasUnsavedWork`/`setUnsavedWork(flag, description?)` store. Nothing sets it
+  yet — a tool calls `setUnsavedWork(true, 'submittal check in progress')`
+  while the user has in-progress work, and `false` when it's safe to leave.
+  `ProjectContext.selectProject()` checks this before switching and, if set,
+  shows `UnsavedWorkGuardModal` instead of switching immediately.
+
+## Adding a server endpoint
+
+Put shared logic in `server/` (framework-agnostic — takes inputs, returns an
+`ApiResult`), then a thin `api/<name>.ts` Vercel adapter and a route in the
+`vite.config.ts` dev middleware. This is the pattern Procore token exchange,
+the project sync, and any future AI API calls should follow — those keys must
+stay server-side.
+
+**Two hard-won rules for anything in `server/` or `api/`** (see the comment at
+the top of `server/vercelAdapter.ts` for the full story): every relative
+import needs an explicit `.js` extension (`from './config.js'`, not
+`'./config'`) — Node's native ESM loader requires it and `tsconfig.node.json`
+is set to `NodeNext` specifically so a missing one is a compile error, not a
+production crash. And never use `import type { X }` or inline `{ type X }` —
+plain `import { X } from 'y'` only; Vercel's dependency scanner fails to parse
+the type-only form and can silently leave real dependencies out of the deploy.
+
 ## Color usage
 
 Custom Tailwind colors (see `tailwind.config.js`). Color is meaningful, not
@@ -138,13 +193,6 @@ decorative:
 
 The Home grid and `ToolCard` need no changes.
 
-## Adding a server endpoint
-
-Put shared logic in `server/` (framework-agnostic — takes inputs, returns
-`{ status, body }`), then a thin `api/<name>.ts` Vercel adapter and a route in
-the `vite.config.ts` dev middleware. This is the pattern Procore token exchange
-and any AI API calls should follow — those keys must stay server-side.
-
 ## Project layout
 
 ```
@@ -152,29 +200,43 @@ api/                   thin Vercel adapters (one file = one endpoint)
   profile.ts
   procore/
     authorize.ts  callback.ts  status.ts  disconnect.ts
+  projects/
+    index.ts (GET /api/projects)  sync.ts  star.ts
 server/                framework-agnostic handlers + logic
   http.ts              ApiResult shape + helpers
   config.ts            server-only env (throws if a required var is missing)
-  vercelAdapter.ts     wrap a handler as a Vercel function
-  auth.ts              verify Microsoft ID token, get Supabase admin, upsert profile
+  vercelAdapter.ts     wrap a handler as a Vercel function (see its header
+                       comment for the two NodeNext/import-type rules)
+  auth.ts              verify Microsoft ID token, get Supabase admin, upsert
+                       profile, resolveProfile() (the common first step)
   profileHandler.ts    POST /api/profile
   procore.ts           Procore OAuth: state signing, token exchange/refresh, storage
   procoreRoutes.ts     the four /api/procore/* handlers
+  procoreApi.ts        generic Procore REST GET (companies, projects-by-company)
+  projects.ts          sync/list/star logic for the project cache
+  projectRoutes.ts     the three /api/projects* handlers
 src/
   components/
-    icons.tsx               placeholder tool icons
+    icons.tsx               placeholder tool icons + sidebar icons
+    AppShell.tsx            header + sidebar chrome, wraps every protected page
+    Sidebar.tsx             collapsible project selector (search, star, refresh)
+    UnsavedWorkGuardModal.tsx  confirm-before-switch dialog
     ProfileMenu.tsx         header avatar + dropdown
     ProcoreConnectionItem.tsx  connect / disconnect / unavailable row
-    ProtectedRoute.tsx      auth gate, redirects to /login
+    ProtectedRoute.tsx      auth gate; wraps children in the context providers + AppShell
     ToolCard.tsx            single tool grid entry
+  contexts/
+    ProjectContext.tsx      selected project (persisted), project list, sync state
+    UnsavedWorkContext.tsx  hasUnsavedWork/setUnsavedWork — no tool uses it yet
   lib/
     msalConfig.ts      MSAL config (single-tenant authority) + login scopes
     apiClient.ts       getIdToken() + apiFetch(): call /api with the ID token
     profiles.ts        ensureProfile()
     procore.ts         getProcoreStatus / startProcoreConnect / disconnectProcore
+    projects.ts        fetchProjects / syncProjects / setProjectStarred
     supabaseClient.ts  browser anon client — reserved for future public reads
   pages/
-    Home.tsx           protected; header, tool grid, Procore result banner
+    Home.tsx           protected; tool grid, Procore result banner (no header — AppShell owns that)
     Login.tsx          Microsoft sign-in
   tools/
     registry.ts        the tool list rendered by Home
