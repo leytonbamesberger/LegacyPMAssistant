@@ -1,4 +1,4 @@
-import { type ApiResult } from './http'
+import { ApiResult } from './http'
 import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth'
 
 export type { ProfileRecord } from './auth'

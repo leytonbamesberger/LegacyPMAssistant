@@ -1,4 +1,4 @@
-import { type ApiResult, redirect } from './http'
+import { ApiResult, redirect } from './http'
 import { resolveAppBaseUrl, getProcoreConfig, isProcoreConfigured } from './config'
 import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth'
 import {
