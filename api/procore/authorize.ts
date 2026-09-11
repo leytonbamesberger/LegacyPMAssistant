@@ -1,5 +1,5 @@
-import { handleProcoreAuthorize } from '../../server/procoreRoutes'
-import { authHeader, requestOrigin, vercelRoute } from '../../server/vercelAdapter'
+import { handleProcoreAuthorize } from '../../server/procoreRoutes.js'
+import { authHeader, requestOrigin, vercelRoute } from '../../server/vercelAdapter.js'
 
 /** POST /api/procore/authorize — returns { url } to send the browser to Procore. */
 export default vercelRoute('POST', (req) =>

@@ -1,6 +1,6 @@
-import { ApiResult, redirect } from './http'
-import { resolveAppBaseUrl, getProcoreConfig, isProcoreConfigured } from './config'
-import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth'
+import { ApiResult, redirect } from './http.js'
+import { resolveAppBaseUrl, getProcoreConfig, isProcoreConfigured } from './config.js'
+import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth.js'
 import {
   buildAuthorizeUrl,
   deleteConnection,
@@ -9,7 +9,7 @@ import {
   signOAuthState,
   storeConnection,
   verifyOAuthState,
-} from './procore'
+} from './procore.js'
 
 /**
  * POST /api/procore/authorize  (MSAL-authenticated)

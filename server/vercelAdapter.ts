@@ -1,21 +1,30 @@
-import { ApiResult } from './http'
+import { ApiResult } from './http.js'
 
 /**
  * Minimal structural shapes for the request/response objects Vercel's Node.js
- * runtime passes to a function — not imported from `@vercel/node` on purpose.
+ * runtime passes to a function — not imported from `@vercel/node` on purpose,
+ * to avoid `import type` syntax here (see the note on module resolution below).
  *
- * Vercel's build uses `@vercel/nft` to statically scan each `api/*.ts` file
- * (and everything it imports) to decide which files from `node_modules` to
- * include in the deployed function. That scanner's TypeScript support is
- * limited: it fails to parse `import type { ... }` / inline `{ type X }`
- * imports, and silently stops tracing that file when it does — which meant
- * `jose` and `@supabase/supabase-js` were being left out of the deployment
- * entirely (confirmed locally with `@vercel/nft`), crashing the function with
- * `Cannot find module` before any of our own error handling could run.
+ * Two real deployment bugs were found and fixed in this file and its siblings:
  *
- * Avoiding `@vercel/node`'s type imports here removes that whole class of
- * bug for this file. Every import anywhere in `server/` or `api/` must stay
- * plain `import { X } from 'y'` — never `import type` or `{ type X }`.
+ * 1. This project's `package.json` has `"type": "module"`, so Vercel runs
+ *    these functions as native ES modules — and Node's native ESM loader
+ *    requires an explicit file extension on every relative import (unlike
+ *    CommonJS or a bundler). `server/` and `api/` are compiled under
+ *    `moduleResolution: "NodeNext"` specifically so TypeScript *enforces*
+ *    this and errors immediately if an extension is missing — every relative
+ *    import must end in `.js` (yes, `.js`, even though the source is `.ts`;
+ *    that's the extension the compiled output will actually have). Omitting
+ *    this produced `ERR_MODULE_NOT_FOUND` at runtime — a crash before any of
+ *    our own error handling could run.
+ *
+ * 2. Separately, Vercel's build uses `@vercel/nft` to statically scan each
+ *    `api/*.ts` file to decide which `node_modules` files to include in the
+ *    deployed function. That scanner fails to parse `import type { ... }` /
+ *    inline `{ type X }` imports and silently stops tracing a file when it
+ *    does, which can leave real dependencies out of the deployment. Fixed by
+ *    using only plain `import { X } from 'y'` everywhere in `server/`/`api/`,
+ *    plus a `vercel.json` `includeFiles` safety net.
  */
 interface MinimalRequest {
   method?: string

@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import { getServerConfig } from './config'
-import { ApiResult, bearerToken } from './http'
+import { getServerConfig } from './config.js'
+import { ApiResult, bearerToken } from './http.js'
 
 export interface AzureIdTokenClaims extends JWTPayload {
   oid?: string

@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose'
 import { SupabaseClient } from '@supabase/supabase-js'
-import { getProcoreConfig, ProcoreConfig } from './config'
+import { getProcoreConfig, ProcoreConfig } from './config.js'
 
 export interface ProcoreConnectionRow {
   id: string

@@ -1,5 +1,5 @@
-import { handleProcoreCallback } from '../../server/procoreRoutes'
-import { queryParam, requestOrigin, vercelRoute } from '../../server/vercelAdapter'
+import { handleProcoreCallback } from '../../server/procoreRoutes.js'
+import { queryParam, requestOrigin, vercelRoute } from '../../server/vercelAdapter.js'
 
 /** GET /api/procore/callback — Procore redirects here with ?code & ?state. */
 export default vercelRoute('GET', (req) =>

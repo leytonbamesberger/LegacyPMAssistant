@@ -14,7 +14,7 @@ place; no tool functionality yet.
 - `jose` for server-side ID-token verification
 - Deploy target: Vercel (`api/` serverless functions + static SPA)
 
-## Getting started:
+## Getting started
 
 ```bash
 npm install

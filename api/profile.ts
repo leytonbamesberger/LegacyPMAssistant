@@ -1,5 +1,5 @@
-import { handleProfileRequest } from '../server/profileHandler'
-import { authHeader, vercelRoute } from '../server/vercelAdapter'
+import { handleProfileRequest } from '../server/profileHandler.js'
+import { authHeader, vercelRoute } from '../server/vercelAdapter.js'
 
 /**
  * POST /api/profile — verify the caller's Microsoft ID token and upsert their

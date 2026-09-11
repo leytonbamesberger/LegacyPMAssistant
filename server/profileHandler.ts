@@ -1,7 +1,5 @@
-import { ApiResult } from './http'
-import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth'
-
-export type { ProfileRecord } from './auth'
+import { ApiResult } from './http.js'
+import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth.js'
 
 /**
  * POST /api/profile
