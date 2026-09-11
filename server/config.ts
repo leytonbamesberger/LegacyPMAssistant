@@ -62,16 +62,23 @@ export function resolveAppBaseUrl(requestOrigin?: string | null): string {
   return 'http://localhost:5173'
 }
 
+const PROCORE_REQUIRED_VARS = [
+  'PROCORE_CLIENT_ID',
+  'PROCORE_CLIENT_SECRET',
+  'PROCORE_OAUTH_STATE_SECRET',
+] as const
+
+/** Which required Procore vars are missing/empty in `process.env` right now. */
+export function missingProcoreVars(): string[] {
+  return PROCORE_REQUIRED_VARS.filter((name) => !process.env[name])
+}
+
 /**
  * True if all Procore OAuth vars are present. The "Connect Procore" button is
  * shown as unavailable (not just broken) when this is false.
  */
 export function isProcoreConfigured(): boolean {
-  return Boolean(
-    process.env.PROCORE_CLIENT_ID &&
-      process.env.PROCORE_CLIENT_SECRET &&
-      process.env.PROCORE_OAUTH_STATE_SECRET,
-  )
+  return missingProcoreVars().length === 0
 }
 
 export function getProcoreConfig(requestOrigin?: string | null) {

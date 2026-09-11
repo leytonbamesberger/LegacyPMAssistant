@@ -55,8 +55,12 @@ export function ProcoreConnectionItem() {
   }
 
   if (!status || !status.configured) {
+    const missing = status?.missingVars
+    const title = missing?.length
+      ? `Missing on the server: ${missing.join(', ')}`
+      : 'Procore isn’t configured on the server yet.'
     return (
-      <Row muted title="Procore isn’t configured on the server yet.">
+      <Row muted title={title}>
         <span>Connect Procore</span>
         <span className="text-[10px] uppercase tracking-wide">Unavailable</span>
       </Row>

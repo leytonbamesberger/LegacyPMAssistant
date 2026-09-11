@@ -1,5 +1,10 @@
 import { ApiResult, redirect } from './http.js'
-import { resolveAppBaseUrl, getProcoreConfig, isProcoreConfigured } from './config.js'
+import {
+  resolveAppBaseUrl,
+  getProcoreConfig,
+  isProcoreConfigured,
+  missingProcoreVars,
+} from './config.js'
 import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth.js'
 import {
   buildAuthorizeUrl,
@@ -25,7 +30,10 @@ export async function handleProcoreAuthorize(
   requestOrigin?: string | null,
 ): Promise<ApiResult> {
   if (!isProcoreConfigured()) {
-    return { status: 503, json: { error: 'Procore is not configured' } }
+    return {
+      status: 503,
+      json: { error: 'Procore is not configured', missingVars: missingProcoreVars() },
+    }
   }
 
   const verified = await verifyMicrosoftToken(authorizationHeader)
@@ -99,7 +107,15 @@ export async function handleProcoreStatus(
   if (!configured) {
     return {
       status: 200,
-      json: { configured: false, connected: false, connectedAt: null, expiresAt: null },
+      json: {
+        configured: false,
+        connected: false,
+        connectedAt: null,
+        expiresAt: null,
+        // Names only, never values — tells you exactly which Vercel env var
+        // isn't reaching this function, without exposing anything sensitive.
+        missingVars: missingProcoreVars(),
+      },
     }
   }
 

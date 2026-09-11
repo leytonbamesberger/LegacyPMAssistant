@@ -8,6 +8,8 @@ export interface ProcoreStatus {
   connected: boolean
   connectedAt: string | null
   expiresAt: string | null
+  /** Present only when `configured` is false — names of missing server env vars. */
+  missingVars?: string[]
 }
 
 export async function getProcoreStatus(
