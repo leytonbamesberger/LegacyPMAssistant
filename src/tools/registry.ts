@@ -36,7 +36,8 @@ export const TOOLS: ToolDefinition[] = [
     description:
       'Compare submittals against spec sections and flag missing or non-compliant items.',
     Icon: ChecklistIcon,
-    status: 'next',
+    status: 'active',
+    path: '/tools/submittal-checker',
   },
   {
     key: 'ai-project-chat',

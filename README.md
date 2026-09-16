@@ -1,8 +1,8 @@
 # Legacy PM Assistant
 
 Internal web app for Legacy Mechanical — a hub for project-management tools.
-This is a **proof of concept**: the shell (auth, navigation, tool grid) is in
-place; no tool functionality yet.
+Proof of concept: the shell (auth, navigation, project selector) is in place,
+and the first real tool — **Submittal Checker** — is wired end to end.
 
 ## Stack
 
@@ -12,6 +12,8 @@ place; no tool functionality yet.
 - Supabase (`@supabase/supabase-js`) — service-role writes via a serverless function
 - MSAL (`@azure/msal-react`, `@azure/msal-browser`) for Microsoft / Azure AD login
 - `jose` for server-side ID-token verification
+- Anthropic Claude (raw `fetch`, no SDK) for the Submittal Checker's AI pipeline
+- `unpdf` for serverless-friendly PDF text extraction; `fuse.js` for client-side fuzzy search
 - Deploy target: Vercel (`api/` serverless functions + static SPA)
 
 ## Getting started
@@ -41,7 +43,7 @@ secret in one. The unprefixed vars are server-only (the `/api` handlers).
 | `SUPABASE_URL` | server | Optional — defaults to `VITE_SUPABASE_URL` |
 | `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` | server | Optional — default to the `VITE_` values |
 | `APP_BASE_URL` | server | App origin, for building Procore redirect URLs (default `http://localhost:5173`) |
-| `ANTHROPIC_API_KEY` | **server, secret** | Not used yet; reserved for the AI tools |
+| `ANTHROPIC_API_KEY` | **server, secret** | Used by the Submittal Checker's AI pipeline (`server/ai/anthropicClient.ts`) |
 | `PROCORE_CLIENT_ID` | server | Procore Developer app — OAuth Credentials |
 | `PROCORE_CLIENT_SECRET` | **server, secret** | Procore Developer app — OAuth Credentials |
 | `PROCORE_OAUTH_STATE_SECRET` | **server, secret** | Random string you generate; signs the OAuth `state` |
@@ -81,6 +83,20 @@ the Supabase SQL editor — it is **not** run automatically.
   Procore token. Rows not seen in the latest sync are soft-deleted
   (`is_active = false`), never hard-deleted.
 - `user_starred_projects` — join table: which projects a profile has starred.
+- `spec_sections` — raw spec text cached per project + normalized CSI section
+  (see `shared/csi.ts`). `procore_version` is actually a content hash, not a
+  Procore-supplied field — see the Submittal Checker section below.
+- `spec_checklists` — the AI-extracted requirement checklist per project +
+  section, invalidated when `source_spec_version` no longer matches the
+  section's current hash.
+- `app_config` — key/value settings readable at request time, e.g.
+  `confidence_threshold` (default `80`) — edit directly in the SQL editor,
+  no redeploy needed.
+- `submittal_checks` / `ai_usage_logs` — one row per uploaded submittal and
+  its result, and one row per AI call made while producing it (for cost
+  tracking). See the Submittal Checker section below.
+- Storage bucket `submittals` (private) — uploaded submittal PDFs, one per
+  `submittal_checks` row (`{project_id}/{submittal_check_id}.pdf`).
 
 **RLS:** every table has Row Level Security **on with no policies**. The public
 anon key can neither read nor write any of them; only the service-role key
@@ -92,7 +108,8 @@ Microsoft-token requests through our own `/api` routes," not as an RLS policy.)
 **Migrations** (run once each, in order, against an existing project):
 [`001_lock_down_profiles_rls.sql`](supabase/migrations/001_lock_down_profiles_rls.sql),
 [`002_procore_connections_unique.sql`](supabase/migrations/002_procore_connections_unique.sql),
-[`003_projects_and_starred.sql`](supabase/migrations/003_projects_and_starred.sql).
+[`003_projects_and_starred.sql`](supabase/migrations/003_projects_and_starred.sql),
+[`004_submittal_checker.sql`](supabase/migrations/004_submittal_checker.sql).
 
 ## Procore connection
 
@@ -156,6 +173,74 @@ context are available everywhere without each page wiring them up.
   `ProjectContext.selectProject()` checks this before switching and, if set,
   shows `UnsavedWorkGuardModal` instead of switching immediately.
 
+## Submittal Checker
+
+The first real tool: upload a submittal PDF, get it checked against the
+project's cached specs across 6 weighted categories, with a scored result.
+
+**Pipeline** (`server/submittals.ts` `runSubmittalCheck`), all AI calls via
+`server/ai/anthropicClient.ts`'s `callAnthropicTool()` — forced tool-use so
+every response is schema-guaranteed JSON, never parsed from free text, and
+**never auto-retried**: a failure marks the row `failed` and the UI offers a
+manual Retry, so a bad response can't silently loop and burn tokens.
+
+1. **Section identification** (skipped if the user picked a section manually)
+   — Haiku classifies the PDF, flags true multi-product bundles, and returns a
+   confidence score. Below `app_config.confidence_threshold` (or Haiku returns
+   no clear section), the pipeline stops without failing and the UI shows the
+   CSI picker instead. A detected multi-product bundle (and the user hasn't
+   checked "treat as one submittal") stops the check with `status: 'multi_product'`.
+   The resolved section is persisted immediately, before the next two
+   (separately billed) steps run — so a later failure's retry doesn't re-run
+   identification.
+2. **Checklist lookup/extraction** (`server/specs.ts` `getOrExtractChecklist`)
+   — reuses the cached `spec_checklists` row if its `source_spec_version`
+   still matches the section's current hash, otherwise re-extracts with Haiku.
+3. **Compliance check** — Sonnet 5 at `medium` effort scores the submittal PDF
+   against the checklist across the 6 categories.
+4. **Scoring**: Pass=2/Caution=1/Fail=0 × category weight (Manufacturer/Model 5,
+   Sizing 5, Certifications 4, Performance Data 4, Accessories 3, Misc 1),
+   summed and divided by `2 × Σweight` over non-N/A categories only. All-N/A
+   → `score_percent: null`, shown as an explanatory state instead of a bar.
+
+**Model/prompt config** — `server/ai/modelConfig.ts` (`PROMPT_MODEL_CONFIG`) is
+the single place each step's provider/model/effort is chosen; add a provider
+later by adding a `callXyz()` next to `callAnthropicTool` and branching there —
+no pipeline call site changes. The three prompts you supplied are stored
+verbatim in `server/prompts/{specIdentification,specExtraction,complianceCheck}.ts`;
+`server/prompts/specSplit.ts` is a fourth prompt I wrote for the "combined
+document" fallback below (not one of the three supplied).
+
+**Deviation from the brief:** these live under `server/ai/` and `server/prompts/`,
+not `src/lib/ai/`/`src/lib/prompts/` as sketched. Nothing in this pipeline ever
+runs in the browser — keeping it entirely inside the server-only tree means it
+can't accidentally end up in the client bundle, and avoids crossing the
+`bundler` (client) / `NodeNext` (server) tsconfig boundary described above for
+no benefit.
+
+**Spec sync** (`server/specs.ts` `syncProjectSpecs`, via "Sync Specs") lists
+the project's Procore specifications with the caller's own token, and per
+document: uses inline text if Procore provides it, else downloads and runs
+`unpdf` extraction; then adaptively either stores it directly under its own
+CSI code (if one is recognizable and the text doesn't look like it contains
+multiple section headers) or runs it through the `specSplit` Haiku prompt
+first and stores each resulting chunk separately. Staleness is tracked by a
+SHA-256 hash of the extracted text (`spec_sections.procore_version`, despite
+the name) rather than a specific Procore "last modified" field — sidesteps
+needing to know that field name, and is arguably more correct anyway (it's
+literally asking "did the content change").
+
+**⚠️ Unverified against a live Procore account:** I could not get a working
+example of the Specifications API's actual response shape (Procore's
+interactive docs are JS-rendered and didn't return usable content to fetch
+tools during development) — unlike Projects/Companies, which I did verify.
+`server/procoreApi.ts`'s `listSpecificationSections` and the field-guessing in
+`server/specs.ts` (`extractOwnCode`/`extractInlineText`/`extractFileUrl`) are
+my best-effort reading of Procore's general REST conventions. **The first real
+"Sync Specs" click should be checked closely** — if it returns zero sections
+or garbled text, that function is where to add a `console.log` of the raw
+response and adjust the candidate field names/endpoint path.
+
 ## Adding a server endpoint
 
 Put shared logic in `server/` (framework-agnostic — takes inputs, returns an
@@ -173,6 +258,11 @@ production crash. And never use `import type { X }` or inline `{ type X }` —
 plain `import { X } from 'y'` only; Vercel's dependency scanner fails to parse
 the type-only form and can silently leave real dependencies out of the deploy.
 
+Logic needed by **both** `src/` and `server/` (e.g. `shared/csi.ts`) goes in
+`shared/`, included in both `tsconfig.json` and `tsconfig.node.json`. Keep
+those files import-free — that's what lets one file satisfy both the client's
+`bundler` resolution and the server's stricter `NodeNext` rules at once.
+
 ## Color usage
 
 Custom Tailwind colors (see `tailwind.config.js`). Color is meaningful, not
@@ -182,7 +272,7 @@ decorative:
 | --- | --- | --- |
 | `legacy-blue-dark` | `#003058` | Primary nav / header, primary buttons |
 | `legacy-blue-light` | `#18385f` | Secondary UI: borders, subtle backgrounds, inactive states |
-| `legacy-red` | `#ee3428` | Accent only: active states, key CTAs, alerts. Used on the "Submittal Checker" card (next tool up). |
+| `legacy-red` | `#ee3428` | Accent only: active states, key CTAs, alerts, warning banners. |
 
 ## Adding a real tool
 
@@ -196,12 +286,19 @@ The Home grid and `ToolCard` need no changes.
 ## Project layout
 
 ```
+shared/                zero-import, dual-tsconfig-safe pure logic (see below)
+  csi.ts               normalizeCsiCode() and friends — always compare via this
+  categories.ts        the 6 compliance categories, weights, display labels
 api/                   thin Vercel adapters (one file = one endpoint)
   profile.ts
   procore/
     authorize.ts  callback.ts  status.ts  disconnect.ts
   projects/
     index.ts (GET /api/projects)  sync.ts  star.ts
+  specs/
+    index.ts (GET /api/specs)  sync.ts
+  submittals/
+    index.ts (POST /api/submittals)  run.ts  get.ts
 server/                framework-agnostic handlers + logic
   http.ts              ApiResult shape + helpers
   config.ts            server-only env (throws if a required var is missing)
@@ -212,32 +309,51 @@ server/                framework-agnostic handlers + logic
   profileHandler.ts    POST /api/profile
   procore.ts           Procore OAuth: state signing, token exchange/refresh, storage
   procoreRoutes.ts     the four /api/procore/* handlers
-  procoreApi.ts        generic Procore REST GET (companies, projects-by-company)
+  procoreApi.ts        generic Procore REST GET (companies, projects, specs)
   projects.ts          sync/list/star logic for the project cache
   projectRoutes.ts     the three /api/projects* handlers
+  pdf.ts               extractPdfText() — unpdf wrapper
+  appConfig.ts         getConfidenceThreshold() — reads app_config at request time
+  storage.ts           submittal PDF Storage: signed upload URL, download
+  specs.ts             spec sync (adaptive per-section vs combined-document
+                       splitting) + getOrExtractChecklist() caching
+  specRoutes.ts        GET /api/specs, POST /api/specs/sync
+  submittals.ts        the full check pipeline (runSubmittalCheck) + scoring
+  submittalRoutes.ts   the three /api/submittals* handlers
+  ai/
+    modelConfig.ts     PROMPT_MODEL_CONFIG — provider/model/effort per step
+    anthropicClient.ts callAnthropicTool() — forced tool-use, never auto-retries
+    usageLog.ts        logAiUsage() -> ai_usage_logs
+  prompts/
+    specIdentification.ts  specExtraction.ts  complianceCheck.ts  (verbatim)
+    specSplit.ts            combined-document fallback (not one of the three supplied)
 src/
   components/
     icons.tsx               placeholder tool icons + sidebar icons
     AppShell.tsx            header + sidebar chrome, wraps every protected page
     Sidebar.tsx             collapsible project selector (search, star, refresh)
     UnsavedWorkGuardModal.tsx  confirm-before-switch dialog
+    CsiSectionPicker.tsx    search-or-browse-by-division spec section picker
     ProfileMenu.tsx         header avatar + dropdown
     ProcoreConnectionItem.tsx  connect / disconnect / unavailable row
     ProtectedRoute.tsx      auth gate; wraps children in the context providers + AppShell
-    ToolCard.tsx            single tool grid entry
+    ToolCard.tsx            single tool grid entry; links to `tool.path` when active
   contexts/
     ProjectContext.tsx      selected project (persisted), project list, sync state
-    UnsavedWorkContext.tsx  hasUnsavedWork/setUnsavedWork — no tool uses it yet
+    UnsavedWorkContext.tsx  hasUnsavedWork/setUnsavedWork — Submittal Checker
+                            sets this while a check is running
   lib/
     msalConfig.ts      MSAL config (single-tenant authority) + login scopes
     apiClient.ts       getIdToken() + apiFetch(): call /api with the ID token
     profiles.ts        ensureProfile()
     procore.ts         getProcoreStatus / startProcoreConnect / disconnectProcore
     projects.ts        fetchProjects / syncProjects / setProjectStarred
-    supabaseClient.ts  browser anon client — reserved for future public reads
+    submittals.ts      specs + submittal-check client calls, incl. Storage upload
+    supabaseClient.ts  browser anon client — used for the signed Storage upload
   pages/
-    Home.tsx           protected; tool grid, Procore result banner (no header — AppShell owns that)
-    Login.tsx          Microsoft sign-in
+    Home.tsx              protected; tool grid, Procore result banner (no header — AppShell owns that)
+    Login.tsx             Microsoft sign-in
+    SubmittalChecker.tsx  upload form, pipeline state machine, results view
   tools/
     registry.ts        the tool list rendered by Home
   App.tsx              routes
@@ -245,7 +361,8 @@ src/
 supabase/
   schema.sql           tables + RLS
   migrations/          one-off SQL to run against an existing project
-vercel.json            SPA rewrite (everything except /api/* -> index.html)
+vercel.json            SPA rewrite (everything except /api/* -> index.html);
+                       maxDuration: 60 on the two AI-heavy routes
 ```
 
 ## Deploying to Vercel

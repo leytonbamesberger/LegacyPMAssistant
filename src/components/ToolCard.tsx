@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import type { ToolDefinition } from '../tools/registry'
 
 interface ToolCardProps {
@@ -16,31 +17,24 @@ const STATUS_LABEL: Record<ToolDefinition['status'], string> = {
  * Visual language (color carries meaning):
  * - `coming-soon`: muted, non-interactive. Greyed text, light border.
  * - `next`: the tool being built now. legacy-red accent border to draw the eye.
- * - `active`: live tool. Interactive hover state, blue-dark affordances.
- *
- * When a tool ships, this component becomes clickable for `active` status with
- * no other change to the Home page.
+ * - `active`: live tool, links to `tool.path`. Interactive hover state, blue-dark affordances.
  */
 export function ToolCard({ tool }: ToolCardProps) {
-  const { name, description, Icon, status } = tool
-  const isActive = status === 'active'
+  const { name, description, Icon, status, path } = tool
+  const isActive = status === 'active' && Boolean(path)
   const isNext = status === 'next'
 
   const containerBase =
     'group relative flex flex-col gap-3 rounded-lg border bg-white p-5 text-left transition'
 
-  const containerByStatus =
-    isActive
-      ? 'border-legacy-blue-light/30 hover:border-legacy-blue-dark hover:shadow-sm cursor-pointer'
-      : isNext
-        ? 'border-legacy-red/60 border-l-4 border-l-legacy-red'
-        : 'border-legacy-blue-light/15 opacity-60 cursor-not-allowed'
+  const containerByStatus = isActive
+    ? 'border-legacy-blue-light/30 hover:border-legacy-blue-dark hover:shadow-sm cursor-pointer'
+    : isNext
+      ? 'border-legacy-red/60 border-l-4 border-l-legacy-red'
+      : 'border-legacy-blue-light/15 opacity-60 cursor-not-allowed'
 
-  return (
-    <div
-      className={`${containerBase} ${containerByStatus}`}
-      aria-disabled={!isActive}
-    >
+  const content = (
+    <>
       <div className="flex items-start justify-between">
         <span
           className={
@@ -62,6 +56,20 @@ export function ToolCard({ tool }: ToolCardProps) {
           {description}
         </p>
       </div>
+    </>
+  )
+
+  if (isActive && path) {
+    return (
+      <Link to={path} className={`${containerBase} ${containerByStatus}`}>
+        {content}
+      </Link>
+    )
+  }
+
+  return (
+    <div className={`${containerBase} ${containerByStatus}`} aria-disabled={!isActive}>
+      {content}
     </div>
   )
 }

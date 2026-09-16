@@ -16,8 +16,8 @@ interface DevRoute {
   method: 'GET' | 'POST'
   module: string
   export: string
-  /** How to call the handler: bearer token, parsed query object, or (token, JSON body). */
-  arg: 'auth' | 'query' | 'authAndBody'
+  /** How to call the handler. */
+  arg: 'auth' | 'query' | 'authAndBody' | 'authAndQuery'
 }
 
 const ROUTES: DevRoute[] = [
@@ -32,6 +32,11 @@ const ROUTES: DevRoute[] = [
   // and /api/projects/star — harmless, since every route's method check below
   // calls next() on a mismatch, letting the request fall through to the right one.
   { path: '/api/projects', method: 'GET', module: '/server/projectRoutes.ts', export: 'handleProjectsList', arg: 'auth' },
+  { path: '/api/specs/sync', method: 'POST', module: '/server/specRoutes.ts', export: 'handleSpecsSync', arg: 'authAndBody' },
+  { path: '/api/specs', method: 'GET', module: '/server/specRoutes.ts', export: 'handleSpecsList', arg: 'authAndQuery' },
+  { path: '/api/submittals/run', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleRunSubmittal', arg: 'authAndBody' },
+  { path: '/api/submittals/get', method: 'GET', module: '/server/submittalRoutes.ts', export: 'handleGetSubmittal', arg: 'authAndQuery' },
+  { path: '/api/submittals', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleCreateSubmittal', arg: 'authAndBody' },
 ]
 
 // Non-secret URL vars have VITE_ fallbacks; forward both so `server/config.ts`
@@ -94,6 +99,15 @@ function devApiPlugin(env: Record<string, string>): Plugin {
         if (route.arg === 'authAndBody') {
           const body = await readJsonBody(req)
           writeResult(res, await fn(req.headers.authorization, body))
+          return
+        }
+
+        if (route.arg === 'authAndQuery') {
+          const url = new URL(req.url ?? '/', origin)
+          writeResult(
+            res,
+            await fn(req.headers.authorization, Object.fromEntries(url.searchParams)),
+          )
           return
         }
 

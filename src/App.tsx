@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { Home } from './pages/Home'
 import { Login } from './pages/Login'
+import { SubmittalChecker } from './pages/SubmittalChecker'
 
 export default function App() {
   return (
@@ -15,6 +16,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Home />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tools/submittal-checker"
+          element={
+            <ProtectedRoute>
+              <SubmittalChecker />
             </ProtectedRoute>
           }
         />

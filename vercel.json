@@ -5,6 +5,8 @@
   ],
   "functions": {
     "api/*.ts": { "includeFiles": "node_modules/**" },
-    "api/**/*.ts": { "includeFiles": "node_modules/**" }
+    "api/**/*.ts": { "includeFiles": "node_modules/**" },
+    "api/submittals/run.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 },
+    "api/specs/sync.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 }
   }
 }
