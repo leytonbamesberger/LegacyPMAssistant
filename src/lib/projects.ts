@@ -37,7 +37,7 @@ export async function syncProjects(
   instance: IPublicClientApplication,
   account: AccountInfo,
 ): Promise<SyncResponse | null> {
-  return apiFetch<SyncResponse>(instance, account, '/api/projects/sync', {
+  return apiFetch<SyncResponse>(instance, account, '/api/projects', {
     method: 'POST',
   })
 }

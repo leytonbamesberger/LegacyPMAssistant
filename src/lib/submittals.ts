@@ -40,7 +40,7 @@ export async function syncProjectSpecs(
   account: AccountInfo,
   projectId: string,
 ): Promise<SpecsSyncResponse | null> {
-  return apiFetch<SpecsSyncResponse>(instance, account, '/api/specs/sync', {
+  return apiFetch<SpecsSyncResponse>(instance, account, '/api/specs', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ projectId }),
@@ -144,7 +144,7 @@ export async function getSubmittal(
   const body = await apiFetch<{ check: SubmittalCheck }>(
     instance,
     account,
-    `/api/submittals/get?id=${encodeURIComponent(id)}`,
+    `/api/submittals?id=${encodeURIComponent(id)}`,
   )
   return body?.check ?? null
 }

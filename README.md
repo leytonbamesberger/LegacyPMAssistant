@@ -79,7 +79,7 @@ the Supabase SQL editor — it is **not** run automatically.
 - `procore_connections` — one row per profile (`unique (profile_id)`), holding
   the user's Procore OAuth tokens. Written only by `/api/procore/callback`.
 - `projects` — cached mirror of Procore projects, shared across all users (not
-  per-profile). Refreshed by `/api/projects/sync` using each caller's own
+  per-profile). Refreshed by `POST /api/projects` using each caller's own
   Procore token. Rows not seen in the latest sync are soft-deleted
   (`is_active = false`), never hard-deleted.
 - `user_starred_projects` — join table: which projects a profile has starred.
@@ -152,7 +152,8 @@ context are available everywhere without each page wiring them up.
 - **`ProjectContext`** (`src/contexts/ProjectContext.tsx`) holds the project
   list, the selected project (persisted in `localStorage`), and sync state.
   On mount it loads the cached list from `GET /api/projects` immediately, then
-  fires `POST /api/projects/sync` in the background — the UI never blocks on
+  fires `POST /api/projects` (same path, different verb — see the Hobby-plan
+  function-count note below) in the background — the UI never blocks on
   Procore. `refreshProjects()` is the same call, exposed for the sidebar's
   manual refresh button.
 - **`server/projects.ts`** does the actual sync: list the caller's Procore
@@ -272,6 +273,15 @@ even though the file exists. Every file in `functions` must be matched by
 non-overlapping way to give every route `includeFiles` while still giving two
 specific routes a longer `maxDuration`.
 
+**A fourth: Vercel's Hobby plan caps a deployment at 12 Serverless Functions**
+(one per file in `api/`, counting recursively). We're at 10. Before adding a
+new one-file-per-verb route, check `find api -name "*.ts" | wc -l` — if you're
+close to 12, consolidate routes that only differ by HTTP method into one file
+with `vercelRouteMulti({ GET: ..., POST: ... })` (see `api/projects/index.ts`,
+`api/specs/index.ts`, or `api/submittals/index.ts` for the pattern) instead of
+one file per verb. This is a platform limit, not a code smell — don't
+"un-consolidate" these back into separate files later without a reason.
+
 ## Color usage
 
 Custom Tailwind colors (see `tailwind.config.js`). Color is meaningful, not
@@ -298,16 +308,18 @@ The Home grid and `ToolCard` need no changes.
 shared/                zero-import, dual-tsconfig-safe pure logic (see below)
   csi.ts               normalizeCsiCode() and friends — always compare via this
   categories.ts        the 6 compliance categories, weights, display labels
-api/                   thin Vercel adapters (one file = one endpoint)
+api/                   thin Vercel adapters (10 files — Hobby plan caps a
+                       deployment at 12; routes that only differ by HTTP verb
+                       share one file via vercelRouteMulti, see below)
   profile.ts
   procore/
     authorize.ts  callback.ts  status.ts  disconnect.ts
   projects/
-    index.ts (GET /api/projects)  sync.ts  star.ts
+    index.ts (GET + POST /api/projects)  star.ts
   specs/
-    index.ts (GET /api/specs)  sync.ts
+    index.ts (GET + POST /api/specs)
   submittals/
-    index.ts (POST /api/submittals)  run.ts  get.ts
+    index.ts (GET + POST /api/submittals)  run.ts
 server/                framework-agnostic handlers + logic
   http.ts              ApiResult shape + helpers
   config.ts            server-only env (throws if a required var is missing)
@@ -326,9 +338,9 @@ server/                framework-agnostic handlers + logic
   storage.ts           submittal PDF Storage: signed upload URL, download
   specs.ts             spec sync (adaptive per-section vs combined-document
                        splitting) + getOrExtractChecklist() caching
-  specRoutes.ts        GET /api/specs, POST /api/specs/sync
+  specRoutes.ts        GET /api/specs (list), POST /api/specs (sync)
   submittals.ts        the full check pipeline (runSubmittalCheck) + scoring
-  submittalRoutes.ts   the three /api/submittals* handlers
+  submittalRoutes.ts   POST/GET /api/submittals (create/get), POST /api/submittals/run
   ai/
     modelConfig.ts     PROMPT_MODEL_CONFIG — provider/model/effort per step
     anthropicClient.ts callAnthropicTool() — forced tool-use, never auto-retries

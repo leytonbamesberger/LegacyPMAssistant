@@ -85,6 +85,44 @@ export function vercelRoute(method: 'GET' | 'POST', handler: Handler) {
   }
 }
 
+/**
+ * Like `vercelRoute`, but for one file serving more than one HTTP method on
+ * the same path (e.g. `GET` = list, `POST` = sync) — Vercel's Hobby plan caps
+ * a deployment at 12 Serverless Functions, so routes that only differ by verb
+ * share one file instead of one-file-per-verb once that starts to matter.
+ */
+export function vercelRouteMulti(handlers: Partial<Record<'GET' | 'POST', Handler>>) {
+  return async (req: MinimalRequest, res: MinimalResponse): Promise<void> => {
+    try {
+      const handler = handlers[req.method as 'GET' | 'POST']
+      if (!handler) {
+        res.setHeader('Allow', Object.keys(handlers).join(', '))
+        res.status(405).json({ error: 'Method not allowed' })
+        return
+      }
+
+      const result = await handler(req)
+
+      for (const [key, value] of Object.entries(result.headers ?? {})) {
+        res.setHeader(key, value)
+      }
+      if (result.redirect) {
+        res.redirect(result.status || 302, result.redirect)
+        return
+      }
+      res.status(result.status).json(result.json ?? {})
+    } catch (err) {
+      console.error(`[api] ${req.url} failed:`, err)
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: 'Internal error',
+          detail: err instanceof Error ? err.message : String(err),
+        })
+      }
+    }
+  }
+}
+
 /** Read a query param that may arrive as `string | string[]`. */
 export function queryParam(
   req: MinimalRequest,

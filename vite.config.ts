@@ -26,16 +26,21 @@ const ROUTES: DevRoute[] = [
   { path: '/api/procore/callback', method: 'GET', module: '/server/procoreRoutes.ts', export: 'handleProcoreCallback', arg: 'query' },
   { path: '/api/procore/status', method: 'GET', module: '/server/procoreRoutes.ts', export: 'handleProcoreStatus', arg: 'auth' },
   { path: '/api/procore/disconnect', method: 'POST', module: '/server/procoreRoutes.ts', export: 'handleProcoreDisconnect', arg: 'auth' },
-  { path: '/api/projects/sync', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsSync', arg: 'auth' },
+  // Vercel's Hobby plan caps a deployment at 12 Serverless Functions, so
+  // routes that differ only by verb share one file in api/ (vercelRouteMulti)
+  // — /api/projects, /api/specs, and /api/submittals below are each really
+  // two handlers. The dev middleware has no such limit, so it keeps one
+  // ROUTES entry per (path, method) pair for clarity; paths just repeat.
   { path: '/api/projects/star', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsStar', arg: 'authAndBody' },
-  // connect mounts by path *prefix*, so this one also matches /api/projects/sync
-  // and /api/projects/star — harmless, since every route's method check below
-  // calls next() on a mismatch, letting the request fall through to the right one.
+  { path: '/api/projects', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsSync', arg: 'auth' },
+  // connect mounts by path *prefix*, so this also matches /api/projects/star —
+  // harmless, since every route's method check below calls next() on a
+  // mismatch, letting the request fall through to the right one.
   { path: '/api/projects', method: 'GET', module: '/server/projectRoutes.ts', export: 'handleProjectsList', arg: 'auth' },
-  { path: '/api/specs/sync', method: 'POST', module: '/server/specRoutes.ts', export: 'handleSpecsSync', arg: 'authAndBody' },
+  { path: '/api/specs', method: 'POST', module: '/server/specRoutes.ts', export: 'handleSpecsSync', arg: 'authAndBody' },
   { path: '/api/specs', method: 'GET', module: '/server/specRoutes.ts', export: 'handleSpecsList', arg: 'authAndQuery' },
   { path: '/api/submittals/run', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleRunSubmittal', arg: 'authAndBody' },
-  { path: '/api/submittals/get', method: 'GET', module: '/server/submittalRoutes.ts', export: 'handleGetSubmittal', arg: 'authAndQuery' },
+  { path: '/api/submittals', method: 'GET', module: '/server/submittalRoutes.ts', export: 'handleGetSubmittal', arg: 'authAndQuery' },
   { path: '/api/submittals', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleCreateSubmittal', arg: 'authAndBody' },
 ]
 
