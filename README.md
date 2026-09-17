@@ -263,6 +263,15 @@ Logic needed by **both** `src/` and `server/` (e.g. `shared/csi.ts`) goes in
 those files import-free — that's what lets one file satisfy both the client's
 `bundler` resolution and the server's stricter `NodeNext` rules at once.
 
+**A third rule, in `vercel.json`'s `functions` block:** never let two patterns
+match the same file — e.g. a broad `"api/**/*.ts"` alongside a specific
+`"api/submittals/run.ts"` for that route's `maxDuration`. Vercel then fails the
+whole build with *"The pattern ... doesn't match any Serverless Functions"*,
+even though the file exists. Every file in `functions` must be matched by
+**exactly one** pattern — see the current block for the explicit,
+non-overlapping way to give every route `includeFiles` while still giving two
+specific routes a longer `maxDuration`.
+
 ## Color usage
 
 Custom Tailwind colors (see `tailwind.config.js`). Color is meaningful, not

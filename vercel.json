@@ -4,9 +4,13 @@
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "functions": {
-    "api/*.ts": { "includeFiles": "node_modules/**" },
-    "api/**/*.ts": { "includeFiles": "node_modules/**" },
-    "api/submittals/run.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 },
-    "api/specs/sync.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 }
+    "api/profile.ts": { "includeFiles": "node_modules/**" },
+    "api/procore/*.ts": { "includeFiles": "node_modules/**" },
+    "api/projects/*.ts": { "includeFiles": "node_modules/**" },
+    "api/specs/index.ts": { "includeFiles": "node_modules/**" },
+    "api/specs/sync.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 },
+    "api/submittals/index.ts": { "includeFiles": "node_modules/**" },
+    "api/submittals/get.ts": { "includeFiles": "node_modules/**" },
+    "api/submittals/run.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 }
   }
 }
