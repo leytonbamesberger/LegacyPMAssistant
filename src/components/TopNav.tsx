@@ -1,8 +1,15 @@
 import { NavLink } from 'react-router-dom'
 
+/**
+ * project-organization branch only: the Tools grid isn't part of this demo,
+ * so its nav button is hidden (not removed) until this branch merges with
+ * the tools work happening on main. Flip back to true to restore it.
+ */
+const SHOW_TOOLS_TAB = false
+
 const NAV_ITEMS = [
   { to: '/organization', label: 'Organization' },
-  { to: '/tools', label: 'Tools' },
+  ...(SHOW_TOOLS_TAB ? [{ to: '/tools', label: 'Tools' }] : []),
 ]
 
 /**
