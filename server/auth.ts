@@ -16,6 +16,7 @@ export interface ProfileRecord {
   azure_oid: string
   email: string
   display_name: string | null
+  title: 'pm' | 'apm' | null
   created_at: string
 }
 

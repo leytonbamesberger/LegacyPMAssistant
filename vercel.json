@@ -5,6 +5,9 @@
   ],
   "functions": {
     "api/profile.ts": { "includeFiles": "node_modules/**" },
+    "api/checklist.ts": { "includeFiles": "node_modules/**" },
+    "api/flow-reports.ts": { "includeFiles": "node_modules/**" },
+    "api/tasks.ts": { "includeFiles": "node_modules/**" },
     "api/procore/*.ts": { "includeFiles": "node_modules/**" },
     "api/projects/*.ts": { "includeFiles": "node_modules/**" },
     "api/specs/index.ts": { "includeFiles": "node_modules/**", "maxDuration": 60 },

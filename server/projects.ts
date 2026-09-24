@@ -12,6 +12,19 @@ export interface ProjectRecord {
   is_active: boolean
   last_synced_at: string
   created_at: string
+  gc: string | null
+  status: 'active' | 'closing' | 'closed'
+  pm_id: string | null
+  apm_id: string | null
+  checklist_enabled: boolean
+}
+
+export interface ProjectEditableFields {
+  gc?: string | null
+  status?: 'active' | 'closing' | 'closed'
+  pm_id?: string | null
+  apm_id?: string | null
+  checklist_enabled?: boolean
 }
 
 export interface ProjectWithStar extends ProjectRecord {
@@ -84,7 +97,14 @@ export async function syncProjects(
   }
 
   const seenProcoreIds = new Set<number>()
-  const rows: Omit<ProjectRecord, 'id' | 'created_at'>[] = []
+  // Only the Procore-derived columns — gc/status/pm_id/apm_id/checklist_enabled
+  // are dashboard fields the user sets, and upsert() only touches the columns
+  // present in each row, so leaving them out here preserves those edits across
+  // every future sync instead of resetting them to their defaults.
+  const rows: Omit<
+    ProjectRecord,
+    'id' | 'created_at' | 'gc' | 'status' | 'pm_id' | 'apm_id' | 'checklist_enabled'
+  >[] = []
   let anyCompanySucceeded = false
 
   for (const company of companies) {
@@ -176,6 +196,8 @@ export async function setProjectStarred(
         { onConflict: 'profile_id,project_id' },
       )
     if (error) throw new Error(error.message)
+
+    await autoAssignOnStar(admin, profileId, projectId)
   } else {
     const { error } = await admin
       .from('user_starred_projects')
@@ -184,4 +206,55 @@ export async function setProjectStarred(
       .eq('project_id', projectId)
     if (error) throw new Error(error.message)
   }
+}
+
+/**
+ * Starring is also the PM/APM claim gesture: a `pm` starring a project with no
+ * `pm_id` (or an `apm` starring one with no `apm_id`) claims that slot. A PM
+ * starring an already-pm_id'd project just stars it — no reassignment. Both
+ * fields stay reassignable afterward via `updateProject`, regardless of title.
+ *
+ * Best-effort: a failure here shouldn't fail the star action itself, so errors
+ * are logged rather than thrown. The `.is('<field>', null)` guard avoids a
+ * race against a concurrent claim or an explicit reassignment.
+ */
+async function autoAssignOnStar(
+  admin: SupabaseClient,
+  profileId: string,
+  projectId: string,
+): Promise<void> {
+  const [{ data: profile, error: profileError }, { data: project, error: projectError }] =
+    await Promise.all([
+      admin.from('profiles').select('title').eq('id', profileId).single(),
+      admin.from('projects').select('pm_id, apm_id').eq('id', projectId).single(),
+    ])
+  if (profileError || projectError) {
+    console.warn(
+      '[projects] auto-assign lookup failed:',
+      (profileError ?? projectError)?.message,
+    )
+    return
+  }
+
+  const title = profile?.title as 'pm' | 'apm' | null
+  if (title !== 'pm' && title !== 'apm') return
+
+  const field = title === 'pm' ? 'pm_id' : 'apm_id'
+  if (project?.[field]) return
+
+  const { error } = await admin
+    .from('projects')
+    .update({ [field]: profileId })
+    .eq('id', projectId)
+    .is(field, null)
+  if (error) console.warn(`[projects] auto-assign ${field} failed:`, error.message)
+}
+
+export async function updateProject(
+  admin: SupabaseClient,
+  projectId: string,
+  fields: ProjectEditableFields,
+): Promise<void> {
+  const { error } = await admin.from('projects').update(fields).eq('id', projectId)
+  if (error) throw new Error(error.message)
 }

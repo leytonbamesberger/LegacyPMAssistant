@@ -1,7 +1,11 @@
 import { Effort } from './modelConfig.js'
+import { fetchWithTimeout } from '../fetchTimeout.js'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
+// Comfortably under Vercel's 60s function budget for these routes, so a
+// stalled call fails with a clear error instead of hanging indefinitely.
+const ANTHROPIC_TIMEOUT_MS = 55000
 
 export type ContentBlock =
   | { type: 'text'; text: string }
@@ -65,15 +69,19 @@ export async function callAnthropicTool<T>(
     body.output_config = { effort: options.effort }
   }
 
-  const res = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'x-api-key': requireApiKey(),
-      'anthropic-version': ANTHROPIC_VERSION,
-      'content-type': 'application/json',
+  const res = await fetchWithTimeout(
+    ANTHROPIC_API_URL,
+    {
+      method: 'POST',
+      headers: {
+        'x-api-key': requireApiKey(),
+        'anthropic-version': ANTHROPIC_VERSION,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  })
+    ANTHROPIC_TIMEOUT_MS,
+  )
 
   const text = await res.text()
   if (!res.ok) {

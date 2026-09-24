@@ -10,6 +10,12 @@ create table profiles (
   created_at timestamptz default now()
 );
 
+-- title: self-reported PM/APM role, set by the user on first login (see
+-- ProfileMenu). Not a permission tier — every authenticated user has full
+-- read/write access everywhere. It only feeds the star -> auto-assign logic
+-- on `projects` below (setProjectStarred in server/projects.ts).
+alter table profiles add column title text check (title in ('pm', 'apm'));
+
 -- procore_connections: per-user Procore OAuth tokens.
 -- Written only by /api/procore/callback (service-role). One row per profile.
 -- Tokens are stored as-is; access is limited to the service-role key (RLS
@@ -40,6 +46,18 @@ create table projects (
 
 create index projects_is_active_idx on projects (is_active);
 
+-- Project checklist / flow-report dashboard fields, layered onto the
+-- Procore-synced project cache above (job_number/name already exist there).
+alter table projects
+  add column gc text,
+  add column status text not null default 'active' check (status in ('active', 'closing', 'closed')),
+  add column pm_id uuid references profiles(id),
+  add column apm_id uuid references profiles(id),
+  add column checklist_enabled boolean not null default true;
+
+create index projects_pm_id_idx on projects (pm_id);
+create index projects_apm_id_idx on projects (apm_id);
+
 -- user_starred_projects: which projects a profile has starred for quick access.
 create table user_starred_projects (
   id uuid primary key default gen_random_uuid(),
@@ -50,6 +68,117 @@ create table user_starred_projects (
 );
 
 create index user_starred_projects_profile_id_idx on user_starred_projects (profile_id);
+
+-- Starring a project is also the PM/APM claim gesture: when a `pm` stars a
+-- project with no pm_id (or an `apm` stars one with no apm_id), the server
+-- sets that assignment. Implemented in setProjectStarred (server/projects.ts),
+-- not here — both fields stay reassignable afterward via a plain UPDATE from
+-- the project card, open to anyone regardless of `title`.
+
+-- checklist_items: master checklist definitions, seeded once below and
+-- shared across every project (not per-project rows). cadence_days is only
+-- set on `weekly` items and drives staleness in project_checklist_log.
+create table checklist_items (
+  id uuid primary key default gen_random_uuid(),
+  phase text not null check (phase in ('setup', 'weekly', 'closeout')),
+  name text not null,
+  sort_order int not null,
+  cadence_days int
+);
+
+-- project_checklist_log: one row per completion event. For setup/closeout
+-- items, the presence of any row = done. For weekly items this is a running
+-- history — checking one off inserts a new row rather than updating the
+-- existing one, and staleness compares now() against the most recent row's
+-- completed_at.
+create table project_checklist_log (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) not null,
+  checklist_item_id uuid references checklist_items(id) not null,
+  completed_at timestamptz not null default now(),
+  completed_by uuid references profiles(id) not null
+);
+
+create index project_checklist_log_project_id_idx on project_checklist_log (project_id);
+create index project_checklist_log_checklist_item_id_idx on project_checklist_log (checklist_item_id);
+
+-- flow_reports: one row per project per month. `answers` holds one key per
+-- FLOW-letter question (Change Proposals, RFIs, Submittals, Applications for
+-- Payment, Field Orders/T&M, Items Due to You From Legacy, Schedule
+-- Acknowledgment, Other) — no fixed columns per question, so the question set
+-- can change without a migration.
+create table flow_reports (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid references projects(id) not null,
+  month date not null,
+  status text not null default 'not_started' check (status in ('not_started', 'in_progress', 'completed')),
+  answers jsonb,
+  submitted_by uuid references profiles(id),
+  submitted_at timestamptz,
+  due_date date,
+  unique (project_id, month)
+);
+
+create index flow_reports_project_id_idx on flow_reports (project_id);
+
+-- tasks: type = 'project' | 'person' | 'personal'. project_id is settable
+-- regardless of type (a personal task can still reference a project).
+-- assigned_by is null for system-generated or personal tasks, set for
+-- person-to-person assignment. visibility is only meaningful for
+-- type = 'personal'.
+--
+-- IMPORTANT: unlike every other table in this file, `tasks` has a real
+-- per-row visibility rule (only assigned_to/assigned_by can see a row) — but
+-- this app has no Supabase Auth session to key an RLS policy on (see the RLS
+-- section below), so that rule is NOT expressed as a Postgres policy. It is
+-- enforced in server/tasks.ts by filtering the query on the caller's
+-- profileId, the same way getProjectsForProfile already does. RLS is still
+-- enabled with no policies here for consistency, not as the access boundary.
+create table tasks (
+  id uuid primary key default gen_random_uuid(),
+  type text not null check (type in ('project', 'person', 'personal')),
+  project_id uuid references projects(id),
+  title text not null,
+  description text,
+  due_date date,
+  status text not null default 'open' check (status in ('open', 'done')),
+  assigned_to uuid references profiles(id) not null,
+  assigned_by uuid references profiles(id),
+  visibility text not null default 'private' check (visibility in ('private', 'public')),
+  created_at timestamptz not null default now(),
+  completed_at timestamptz
+);
+
+create index tasks_assigned_to_idx on tasks (assigned_to);
+create index tasks_assigned_by_idx on tasks (assigned_by);
+create index tasks_project_id_idx on tasks (project_id);
+
+-- Seed the master checklist (mirrors the existing spreadsheet categories).
+-- Run once; re-running is safe to skip if rows already exist.
+insert into checklist_items (phase, name, sort_order, cadence_days) values
+  ('setup', 'Job Setup Sheet', 1, null),
+  ('setup', 'Block Party', 2, null),
+  ('setup', 'Kick-off Meeting', 3, null),
+  ('setup', 'Notification Timelines', 4, null),
+  ('setup', 'Budget Import', 5, null),
+  ('setup', 'Cx and Startup Service Forms (sent)', 6, null),
+  ('setup', 'Strong Finish Meeting', 7, null),
+  ('setup', 'Service/Client Intro & PM Agreement', 8, null),
+  ('setup', 'Closeout Meeting', 9, null),
+  ('setup', 'Productivity Tracking', 10, null),
+  ('setup', 'Submittals Requested', 11, null),
+  ('setup', 'Permits Pulled', 12, null),
+  ('setup', 'Subcontracts Issued', 13, null),
+  ('setup', 'Client Contacts on Daily Log Distribution', 14, null),
+  ('weekly', 'Weekly Project Meeting', 1, 7),
+  ('weekly', 'Project Schedule Update', 2, 7),
+  ('weekly', 'Procurement Log Update', 3, 7),
+  ('weekly', 'Open Change Events', 4, 7),
+  ('weekly', 'Site Walk', 5, 7),
+  ('weekly', 'AR Spreadsheet Updates', 6, 7),
+  ('closeout', 'Custom Feedback Survey Sent', 1, null),
+  ('closeout', 'Timesheets Disabled in Procore', 2, null),
+  ('closeout', 'Customer Letter of Rec.', 3, null);
 
 -- spec_sections: raw spec text cached per project + normalized CSI section
 -- (see shared/csi.ts — always compare the normalized `csi_code`, never a raw
@@ -122,7 +251,7 @@ create table ai_usage_logs (
   id uuid primary key default gen_random_uuid(),
   submittal_check_id uuid references submittal_checks(id),
   profile_id uuid references profiles(id),
-  prompt_type text not null,   -- 'specIdentification' | 'specExtraction' | 'specSplit' | 'complianceCheck'
+  prompt_type text not null,   -- 'specIdentification' | 'specExtraction' | 'complianceCheck'
   provider text not null,
   model text not null,
   input_tokens integer,
@@ -170,6 +299,16 @@ alter table spec_checklists enable row level security;
 alter table app_config enable row level security;
 alter table submittal_checks enable row level security;
 alter table ai_usage_logs enable row level security;
+alter table checklist_items enable row level security;
+alter table project_checklist_log enable row level security;
+alter table flow_reports enable row level security;
+alter table tasks enable row level security;
+
+-- tasks is the one table above where "RLS enabled, no policies" is NOT the
+-- same as "no visibility restriction" — see the comment on `tasks` itself.
+-- The restriction is real, it's just enforced in server/tasks.ts instead of
+-- in Postgres, because this app has no Supabase Auth session to check
+-- against (MSAL-only auth — see the top of this section).
 
 -- If you later need the browser to READ some non-sensitive public data, add a
 -- narrow SELECT policy to that specific table only, e.g.:

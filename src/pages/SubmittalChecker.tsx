@@ -67,7 +67,15 @@ export function SubmittalChecker() {
     const result = await syncProjectSpecs(instance, account, selectedProject.id)
     if (result) {
       setSpecs(result.sections)
-      setSpecsSyncError(result.syncOk ? null : result.syncError)
+      if (!result.syncOk) {
+        setSpecsSyncError(result.syncError)
+      } else if (result.sections.length === 0) {
+        setSpecsSyncError(
+          'Sync completed, but no usable specification documents were found — sections in Procore may not have an uploaded PDF revision yet.',
+        )
+      } else {
+        setSpecsSyncError(null)
+      }
     } else {
       setSpecsSyncError('Could not sync specs')
     }
@@ -183,6 +191,9 @@ export function SubmittalChecker() {
           >
             {specsSyncing ? 'Syncing…' : 'Sync Specs'}
           </button>
+          {specsSyncError && (
+            <p className="mt-2 text-xs text-legacy-red">{specsSyncError}</p>
+          )}
         </EmptyState>
       ) : phase.kind === 'form' || phase.kind === 'uploading' || phase.kind === 'running' ? (
         <form onSubmit={handleSubmit} className="max-w-xl space-y-5">
@@ -356,7 +367,7 @@ function PageShell({
     <div className="mx-auto w-full max-w-4xl px-6 py-10">
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <Link to="/home" className="text-xs text-legacy-blue-light hover:underline">
+          <Link to="/tools" className="text-xs text-legacy-blue-light hover:underline">
             ← Back to Tools
           </Link>
           <h1 className="mt-1 text-xl font-semibold text-legacy-blue-dark">

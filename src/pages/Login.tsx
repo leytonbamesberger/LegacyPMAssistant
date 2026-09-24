@@ -10,7 +10,7 @@ export function Login() {
   const [error, setError] = useState<string | null>(null)
 
   if (isAuthenticated) {
-    return <Navigate to="/home" replace />
+    return <Navigate to="/organization" replace />
   }
 
   const busy = inProgress !== InteractionStatus.None

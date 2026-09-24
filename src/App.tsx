@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { Home } from './pages/Home'
 import { Login } from './pages/Login'
+import { ProjectDashboard } from './pages/ProjectDashboard'
 import { SubmittalChecker } from './pages/SubmittalChecker'
 
 export default function App() {
@@ -12,7 +13,15 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<Login />} />
         <Route
-          path="/home"
+          path="/organization"
+          element={
+            <ProtectedRoute>
+              <ProjectDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tools"
           element={
             <ProtectedRoute>
               <Home />
@@ -27,8 +36,10 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-        <Route path="/" element={<Navigate to="/home" replace />} />
-        <Route path="*" element={<Navigate to="/home" replace />} />
+        {/* Pre-reorg bookmark, kept as a redirect in case it's saved anywhere. */}
+        <Route path="/home" element={<Navigate to="/organization" replace />} />
+        <Route path="/" element={<Navigate to="/organization" replace />} />
+        <Route path="*" element={<Navigate to="/organization" replace />} />
       </Routes>
     </BrowserRouter>
   )

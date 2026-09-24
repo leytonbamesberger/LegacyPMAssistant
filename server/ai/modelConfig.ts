@@ -5,7 +5,7 @@
  * in `server/ai/callModel.ts`; no pipeline code needs to change.
  */
 
-export type PipelineStep = 'specIdentification' | 'specExtraction' | 'specSplit' | 'complianceCheck'
+export type PipelineStep = 'specIdentification' | 'specExtraction' | 'complianceCheck'
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
@@ -18,9 +18,6 @@ export interface ModelStepConfig {
 export const PROMPT_MODEL_CONFIG: Record<PipelineStep, ModelStepConfig> = {
   specIdentification: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
   specExtraction: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
-  // Not one of the three prompts supplied, but needed by Part 1's "combined
-  // document" fallback — cheap, so it gets Haiku too.
-  specSplit: { provider: 'anthropic', model: 'claude-haiku-4-5-20251001' },
   complianceCheck: {
     provider: 'anthropic',
     model: 'claude-sonnet-5',

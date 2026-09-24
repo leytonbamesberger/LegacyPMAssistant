@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useMsal } from '@azure/msal-react'
 import { ProcoreConnectionItem } from './ProcoreConnectionItem'
+import { useProfile } from '../contexts/ProfileContext'
 
 /**
  * Top-right profile element for the Home header: circular avatar placeholder +
@@ -16,6 +17,8 @@ export function ProfileMenu() {
   const account = accounts[0]
   const displayName = account?.name ?? account?.username ?? 'Account'
   const initials = getInitials(displayName)
+  const { profile, setTitle } = useProfile()
+  const needsTitle = profile !== null && profile.title === null
 
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -51,8 +54,14 @@ export function ProfileMenu() {
         aria-haspopup="menu"
         aria-expanded={open}
       >
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/15 text-xs font-semibold">
+        <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-white/15 text-xs font-semibold">
           {initials}
+          {needsTitle && (
+            <span
+              className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-legacy-red ring-2 ring-legacy-blue-dark"
+              aria-hidden
+            />
+          )}
         </span>
         <span className="hidden text-sm font-medium sm:block">{displayName}</span>
       </button>
@@ -73,6 +82,8 @@ export function ProfileMenu() {
             )}
           </div>
 
+          <RoleMenuItem title={profile?.title ?? null} onSetTitle={setTitle} />
+
           <ProcoreConnectionItem />
 
           <div className="my-1 border-t border-legacy-blue-light/15" />
@@ -87,6 +98,62 @@ export function ProfileMenu() {
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+const TITLE_LABEL: Record<'pm' | 'apm', string> = {
+  pm: 'Project Manager',
+  apm: 'Assistant PM',
+}
+
+/**
+ * Self-reported role, used only to feed the star -> auto-assign logic on
+ * projects (see supabase/schema.sql) — not a permission tier. Required on
+ * first login (shown highlighted, un-dismissable until set); editable at any
+ * time afterward via the same two buttons.
+ */
+function RoleMenuItem({
+  title,
+  onSetTitle,
+}: {
+  title: 'pm' | 'apm' | null
+  onSetTitle: (title: 'pm' | 'apm') => Promise<void>
+}) {
+  const [saving, setSaving] = useState(false)
+
+  async function pick(next: 'pm' | 'apm') {
+    if (next === title || saving) return
+    setSaving(true)
+    await onSetTitle(next)
+    setSaving(false)
+  }
+
+  return (
+    <div
+      className={`px-3 py-2 ${title === null ? 'bg-legacy-red/5' : ''}`}
+      role="menuitem"
+    >
+      <p className="mb-1.5 text-xs font-medium text-legacy-blue-light">
+        {title === null ? 'Set your role to continue' : 'Your role'}
+      </p>
+      <div className="flex gap-1.5">
+        {(['pm', 'apm'] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            disabled={saving}
+            onClick={() => void pick(option)}
+            className={`rounded-full px-2.5 py-1 text-xs font-medium transition disabled:opacity-60 ${
+              title === option
+                ? 'bg-legacy-blue-dark text-white'
+                : 'border border-legacy-blue-light/30 text-legacy-blue-dark hover:border-legacy-blue-dark'
+            }`}
+          >
+            {TITLE_LABEL[option]}
+          </button>
+        ))}
+      </div>
     </div>
   )
 }

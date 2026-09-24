@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { ProfileMenu } from './ProfileMenu'
 import { Sidebar } from './Sidebar'
+import { TopNav } from './TopNav'
 import { UnsavedWorkGuardModal } from './UnsavedWorkGuardModal'
 
 /**
@@ -19,6 +20,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           <ProfileMenu />
         </div>
       </header>
+
+      <TopNav />
 
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />

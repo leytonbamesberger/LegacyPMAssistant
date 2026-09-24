@@ -208,9 +208,7 @@ manual Retry, so a bad response can't silently loop and burn tokens.
 the single place each step's provider/model/effort is chosen; add a provider
 later by adding a `callXyz()` next to `callAnthropicTool` and branching there —
 no pipeline call site changes. The three prompts you supplied are stored
-verbatim in `server/prompts/{specIdentification,specExtraction,complianceCheck}.ts`;
-`server/prompts/specSplit.ts` is a fourth prompt I wrote for the "combined
-document" fallback below (not one of the three supplied).
+verbatim in `server/prompts/{specIdentification,specExtraction,complianceCheck}.ts`.
 
 **Deviation from the brief:** these live under `server/ai/` and `server/prompts/`,
 not `src/lib/ai/`/`src/lib/prompts/` as sketched. Nothing in this pipeline ever
@@ -219,28 +217,29 @@ can't accidentally end up in the client bundle, and avoids crossing the
 `bundler` (client) / `NodeNext` (server) tsconfig boundary described above for
 no benefit.
 
-**Spec sync** (`server/specs.ts` `syncProjectSpecs`, via "Sync Specs") lists
-the project's Procore specifications with the caller's own token, and per
-document: uses inline text if Procore provides it, else downloads and runs
-`unpdf` extraction; then adaptively either stores it directly under its own
-CSI code (if one is recognizable and the text doesn't look like it contains
-multiple section headers) or runs it through the `specSplit` Haiku prompt
-first and stores each resulting chunk separately. Staleness is tracked by a
-SHA-256 hash of the extracted text (`spec_sections.procore_version`, despite
-the name) rather than a specific Procore "last modified" field — sidesteps
-needing to know that field name, and is arguably more correct anyway (it's
-literally asking "did the content change").
+**Spec sync** (`server/specs.ts` `syncProjectSpecs`, via "Sync Specs") lists the
+project's `specification_sections` with the caller's own Procore token — each
+entry only carries metadata (`id`, `number`, `description`, `current_revision_id`),
+no document content — then per entry fetches its current revision
+(`getSpecificationSectionRevision`, the v2.1 "show" endpoint) for the PDF's
+`url` and runs `unpdf` extraction on it. Each Procore section maps 1:1 to one
+cached row under its own `number` as the CSI code; there is **no AI involved
+in sync** — an earlier version tried to detect and re-split "combined"
+documents (one PDF covering several CSI codes) via an AI pass, but that made
+every sync slow and prone to timing out on real documents for a case that's
+rare in practice, so it was removed. Staleness is tracked by a SHA-256 hash of
+the extracted text (`spec_sections.procore_version`, despite the name) rather
+than a specific Procore "last modified" field.
 
-**⚠️ Unverified against a live Procore account:** I could not get a working
-example of the Specifications API's actual response shape (Procore's
-interactive docs are JS-rendered and didn't return usable content to fetch
-tools during development) — unlike Projects/Companies, which I did verify.
-`server/procoreApi.ts`'s `listSpecificationSections` and the field-guessing in
-`server/specs.ts` (`extractOwnCode`/`extractInlineText`/`extractFileUrl`) are
-my best-effort reading of Procore's general REST conventions. **The first real
-"Sync Specs" click should be checked closely** — if it returns zero sections
-or garbled text, that function is where to add a `console.log` of the raw
-response and adjust the candidate field names/endpoint path.
+**Verified against a live Procore account** (initially shipped unverified,
+since Procore's interactive docs are JS-rendered and didn't return usable
+content to fetch tools — confirmed later via the built-in browser tool and a
+real sync). Two things Procore's own reference docs get wrong, worth knowing
+if this breaks again: (1) `specification_sections`' list endpoint returns only
+metadata, not `title`/`text`/`url` as you might assume — the actual document
+lives on the revision, fetched separately; (2) the v2.1 revision "show"
+endpoint's docs say the response is nested under `data.selected_revision`, but
+the live API actually nests it under `data.current_revision`.
 
 ## Adding a server endpoint
 
@@ -274,12 +273,16 @@ non-overlapping way to give every route `includeFiles` while still giving two
 specific routes a longer `maxDuration`.
 
 **A fourth: Vercel's Hobby plan caps a deployment at 12 Serverless Functions**
-(one per file in `api/`, counting recursively). We're at 10. Before adding a
-new one-file-per-verb route, check `find api -name "*.ts" | wc -l` — if you're
-close to 12, consolidate routes that only differ by HTTP method into one file
-with `vercelRouteMulti({ GET: ..., POST: ... })` (see `api/projects/index.ts`,
-`api/specs/index.ts`, or `api/submittals/index.ts` for the pattern) instead of
-one file per verb. This is a platform limit, not a code smell — don't
+(one per file in `api/`, counting recursively). **We're at 12/12 — the cap is
+maxed out.** Any new route MUST be added as another action on an existing file
+(dispatch on an `action` field in the POST body — see `handleProjectsPost` in
+`projectRoutes.ts`, or `handleTasksPost` in `taskRoutes.ts`, for the pattern),
+never as a new `api/*.ts` file, until either a file is consolidated away or
+the project upgrades off the Hobby plan. Check `find api -name "*.ts" | wc -l`
+before adding anything. Routes that only differ by HTTP method already share
+one file via `vercelRouteMulti({ GET: ..., POST: ... })` (see
+`api/projects/index.ts`, `api/checklist.ts`, `api/flow-reports.ts`, or
+`api/tasks.ts`). This is a platform limit, not a code smell — don't
 "un-consolidate" these back into separate files later without a reason.
 
 ## Color usage
@@ -308,14 +311,21 @@ The Home grid and `ToolCard` need no changes.
 shared/                zero-import, dual-tsconfig-safe pure logic (see below)
   csi.ts               normalizeCsiCode() and friends — always compare via this
   categories.ts        the 6 compliance categories, weights, display labels
-api/                   thin Vercel adapters (10 files — Hobby plan caps a
-                       deployment at 12; routes that only differ by HTTP verb
-                       share one file via vercelRouteMulti, see below)
-  profile.ts
+api/                   thin Vercel adapters (12 of 12 files — Hobby plan caps a
+                       deployment at 12; the cap is MAXED, see above; routes
+                       that only differ by HTTP verb — or by an `action` field
+                       in a POST body — share one file via vercelRouteMulti)
+  profile.ts (GET directory; POST upsert + optional { title })
   procore/
     authorize.ts  callback.ts  status.ts  disconnect.ts
   projects/
-    index.ts (GET + POST /api/projects)  star.ts
+    index.ts (GET /api/projects; POST dispatches on body.action:
+              'sync' | 'star' | 'update')
+  checklist.ts (GET status; POST dispatches on body.action: 'toggle' | 'log')
+  flow-reports.ts (GET this month's status; POST dispatches on body.action:
+                   'save' | 'submit')
+  tasks.ts (GET tasks visible to caller; POST dispatches on body.action:
+            'create' | 'set-status' | 'delete')
   specs/
     index.ts (GET + POST /api/specs)
   submittals/
@@ -331,8 +341,21 @@ server/                framework-agnostic handlers + logic
   procore.ts           Procore OAuth: state signing, token exchange/refresh, storage
   procoreRoutes.ts     the four /api/procore/* handlers
   procoreApi.ts        generic Procore REST GET (companies, projects, specs)
-  projects.ts          sync/list/star logic for the project cache
-  projectRoutes.ts     the three /api/projects* handlers
+  projects.ts          sync/list/star/update logic for the project cache
+  projectRoutes.ts     the /api/projects handlers (list, and the sync/star/
+                       update actions dispatched from handleProjectsPost)
+  checklist.ts         status/toggle/log logic for the project checklist
+  checklistRoutes.ts   the /api/checklist handlers (status, and the toggle/
+                       log actions dispatched from handleChecklistPost)
+  flowReports.ts       this-month status/save/submit logic for flow reports
+                       (synthesizes a not_started placeholder per project
+                       until a real row is saved — no cron, see schema.sql)
+  flowReportRoutes.ts  the /api/flow-reports handlers (list, and the save/
+                       submit actions dispatched from handleFlowReportsPost)
+  tasks.ts             visibility (assigned_to/assigned_by, no RLS backstop —
+                       see schema.sql) + create/status/delete logic
+  taskRoutes.ts        the /api/tasks handlers (list, and the create/
+                       set-status/delete actions dispatched from handleTasksPost)
   pdf.ts               extractPdfText() — unpdf wrapper
   appConfig.ts         getConfidenceThreshold() — reads app_config at request time
   storage.ts           submittal PDF Storage: signed upload URL, download
@@ -347,7 +370,6 @@ server/                framework-agnostic handlers + logic
     usageLog.ts        logAiUsage() -> ai_usage_logs
   prompts/
     specIdentification.ts  specExtraction.ts  complianceCheck.ts  (verbatim)
-    specSplit.ts            combined-document fallback (not one of the three supplied)
 src/
   components/
     icons.tsx               placeholder tool icons + sidebar icons

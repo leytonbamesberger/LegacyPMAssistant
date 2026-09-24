@@ -4,6 +4,7 @@ import { useMsal } from '@azure/msal-react'
 import { InteractionStatus } from '@azure/msal-browser'
 import { Navigate } from 'react-router-dom'
 import { UnsavedWorkProvider } from '../contexts/UnsavedWorkContext'
+import { ProfileProvider } from '../contexts/ProfileContext'
 import { ProjectProvider } from '../contexts/ProjectContext'
 import { AppShell } from './AppShell'
 
@@ -34,9 +35,11 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   return (
     <UnsavedWorkProvider>
-      <ProjectProvider>
-        <AppShell>{children}</AppShell>
-      </ProjectProvider>
+      <ProfileProvider>
+        <ProjectProvider>
+          <AppShell>{children}</AppShell>
+        </ProjectProvider>
+      </ProfileProvider>
     </UnsavedWorkProvider>
   )
 }

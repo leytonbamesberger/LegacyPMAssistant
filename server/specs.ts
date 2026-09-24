@@ -4,6 +4,7 @@ import { normalizeCsiCode } from '../shared/csi.js'
 import { getValidAccessToken } from './procore.js'
 import {
   downloadBinary,
+  getSpecificationSectionRevision,
   listSpecificationSections,
   RawProcoreSpecSection,
 } from './procoreApi.js'
@@ -16,11 +17,6 @@ import {
   SPEC_EXTRACTION_SCHEMA,
   SpecExtractionResult,
 } from './prompts/specExtraction.js'
-import {
-  SPEC_SPLIT_PROMPT,
-  SPEC_SPLIT_SCHEMA,
-  SpecSplitResult,
-} from './prompts/specSplit.js'
 
 /** Listing shape — no `raw_text`, so the picker's fetch stays small. Only
  * `getOrExtractChecklist` reads the raw text, via its own narrower query. */
@@ -41,9 +37,6 @@ export interface SyncSpecsResult {
 }
 
 const CODE_RE = /(\d{2})[\s.-]?(\d{2})[\s.-]?(\d{2})/
-// Matches "SECTION 22 13 13" style headers to count how many sections a
-// combined chunk of text actually contains.
-const SECTION_HEADER_RE = /\bsection\s+\d{2}[\s.-]?\d{2}[\s.-]?\d{2}\b/gi
 
 function contentVersion(text: string): string {
   return createHash('sha256').update(text).digest('hex')
@@ -92,14 +85,38 @@ function extractFileUrl(raw: RawProcoreSpecSection): string | null {
   return null
 }
 
+/**
+ * `specification_sections` list items carry no text or document reference of
+ * their own — only `current_revision_id` — so the actual PDF has to be
+ * fetched from the revision resource. `extractInlineText`/`extractFileUrl`
+ * are kept as a defensive fallback in case a differently-configured project
+ * ever returns a shape with those fields directly.
+ */
 async function resolveItemText(
   raw: RawProcoreSpecSection,
   accessToken: string,
+  companyId: number,
+  projectId: number,
 ): Promise<string | null> {
   const inline = extractInlineText(raw)
   if (inline) return inline
 
-  const fileUrl = extractFileUrl(raw)
+  let fileUrl = extractFileUrl(raw)
+
+  if (!fileUrl && typeof raw.current_revision_id === 'number') {
+    try {
+      const revision = await getSpecificationSectionRevision(
+        accessToken,
+        companyId,
+        projectId,
+        raw.current_revision_id,
+      )
+      fileUrl = extractFileUrl(revision)
+    } catch (err) {
+      console.warn(`[specs] could not fetch revision ${raw.current_revision_id}:`, err)
+    }
+  }
+
   if (!fileUrl) return null
 
   try {
@@ -112,41 +129,18 @@ async function resolveItemText(
   }
 }
 
-async function splitCombinedText(
-  text: string,
-  profileId: string,
-  admin: SupabaseClient,
-): Promise<{ csi_section: string; title: string | null; text: string }[]> {
-  const config = PROMPT_MODEL_CONFIG.specSplit
-  const { data, inputTokens, outputTokens } = await callAnthropicTool<SpecSplitResult>({
-    model: config.model,
-    effort: config.effort,
-    system: SPEC_SPLIT_PROMPT,
-    content: [textContentBlock(text)],
-    toolName: 'record_sections',
-    toolDescription: 'Record the split-out specification sections.',
-    toolSchema: SPEC_SPLIT_SCHEMA,
-  })
-  await logAiUsage(admin, {
-    submittalCheckId: null,
-    profileId,
-    promptType: 'specSplit',
-    model: config.model,
-    inputTokens,
-    outputTokens,
-  })
-  return data.sections
-}
-
 /**
  * Sync a project's Procore specifications into `spec_sections`. Uses the
- * caller's own Procore token. Adaptive per item: if it already carries a
- * single recognizable CSI code and its text doesn't look like it contains
- * multiple "SECTION xx xx xx" headers, it's stored directly; otherwise a
- * cheap Haiku pass (`specSplit`) splits it into per-section chunks first.
- * Staleness is tracked by content hash, not a Procore-specific version field
- * (see the note on `RawProcoreSpecSection`), so this works regardless of
- * exactly which "last modified" field Procore's response actually uses.
+ * caller's own Procore token. One Procore `specification_sections` entry maps
+ * to one cached row — its own `number`/`description` are trusted as the CSI
+ * code and title, and its document's raw text is cached as-is, with no AI
+ * involved in sync at all (an earlier version tried to detect and re-split
+ * "combined" documents via an AI pass, but that made every sync slow, costly,
+ * and prone to timing out on real documents for a case that's rare in
+ * practice). Staleness is tracked by content hash, not a Procore-specific
+ * version field (see the note on `RawProcoreSpecSection`), so this works
+ * regardless of exactly which "last modified" field Procore's response
+ * actually uses.
  */
 export async function syncProjectSpecs(
   admin: SupabaseClient,
@@ -161,6 +155,9 @@ export async function syncProjectSpecs(
   if (projectError) return { ok: false, error: projectError.message, sectionCount: 0 }
   if (!project) return { ok: false, error: 'Unknown project', sectionCount: 0 }
 
+  const companyId = project.procore_company_id as number
+  const procoreProjectId = project.procore_project_id as number
+
   let accessToken: string | null
   try {
     accessToken = await getValidAccessToken(admin, profileId)
@@ -174,11 +171,7 @@ export async function syncProjectSpecs(
 
   let rawSections: RawProcoreSpecSection[]
   try {
-    rawSections = await listSpecificationSections(
-      accessToken,
-      project.procore_project_id as number,
-      project.procore_company_id as number,
-    )
+    rawSections = await listSpecificationSections(accessToken, procoreProjectId, companyId)
   } catch (err) {
     console.warn('[specs] listSpecificationSections failed:', err)
     return { ok: false, error: 'Could not reach Procore', sectionCount: 0 }
@@ -195,44 +188,28 @@ export async function syncProjectSpecs(
   }[] = []
 
   for (const raw of rawSections) {
-    const text = await resolveItemText(raw, accessToken)
+    const text = await resolveItemText(raw, accessToken, companyId, procoreProjectId)
+    // Spread out the per-section revision fetch to stay under Procore's rate
+    // limit on projects with many spec sections (procoreGet also retries a
+    // 429 itself, but avoiding it in the first place means fewer stalls).
+    await new Promise((resolve) => setTimeout(resolve, 150))
     if (!text) continue
 
     const ownCode = extractOwnCode(raw)
-    const headerMatches = text.match(SECTION_HEADER_RE)
-    const looksSegmented = ownCode !== null && (headerMatches?.length ?? 0) <= 1
-
-    if (looksSegmented && ownCode) {
-      rowsToUpsert.push({
-        project_id: projectId,
-        csi_code: ownCode.code,
-        csi_code_display: ownCode.display,
-        title: extractTitle(raw),
-        raw_text: text,
-        procore_version: contentVersion(text),
-        synced_at: new Date().toISOString(),
-      })
+    if (!ownCode) {
+      console.warn('[specs] could not determine a CSI code for item', raw.id)
       continue
     }
 
-    try {
-      const parts = await splitCombinedText(text, profileId, admin)
-      for (const part of parts) {
-        const normalized = normalizeCsiCode(part.csi_section)
-        if (!normalized) continue
-        rowsToUpsert.push({
-          project_id: projectId,
-          csi_code: normalized,
-          csi_code_display: part.csi_section,
-          title: part.title,
-          raw_text: part.text,
-          procore_version: contentVersion(part.text),
-          synced_at: new Date().toISOString(),
-        })
-      }
-    } catch (err) {
-      console.warn('[specs] splitCombinedText failed for one document:', err)
-    }
+    rowsToUpsert.push({
+      project_id: projectId,
+      csi_code: ownCode.code,
+      csi_code_display: ownCode.display,
+      title: extractTitle(raw),
+      raw_text: text,
+      procore_version: contentVersion(text),
+      synced_at: new Date().toISOString(),
+    })
   }
 
   if (rowsToUpsert.length === 0) {

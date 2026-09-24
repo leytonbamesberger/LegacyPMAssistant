@@ -21,27 +21,31 @@ interface DevRoute {
 }
 
 const ROUTES: DevRoute[] = [
-  { path: '/api/profile', method: 'POST', module: '/server/profileHandler.ts', export: 'handleProfileRequest', arg: 'auth' },
+  { path: '/api/profile', method: 'POST', module: '/server/profileHandler.ts', export: 'handleProfileRequest', arg: 'authAndBody' },
+  { path: '/api/profile', method: 'GET', module: '/server/profileHandler.ts', export: 'handleProfileDirectory', arg: 'auth' },
   { path: '/api/procore/authorize', method: 'POST', module: '/server/procoreRoutes.ts', export: 'handleProcoreAuthorize', arg: 'auth' },
   { path: '/api/procore/callback', method: 'GET', module: '/server/procoreRoutes.ts', export: 'handleProcoreCallback', arg: 'query' },
   { path: '/api/procore/status', method: 'GET', module: '/server/procoreRoutes.ts', export: 'handleProcoreStatus', arg: 'auth' },
   { path: '/api/procore/disconnect', method: 'POST', module: '/server/procoreRoutes.ts', export: 'handleProcoreDisconnect', arg: 'auth' },
   // Vercel's Hobby plan caps a deployment at 12 Serverless Functions, so
-  // routes that differ only by verb share one file in api/ (vercelRouteMulti)
-  // — /api/projects, /api/specs, and /api/submittals below are each really
-  // two handlers. The dev middleware has no such limit, so it keeps one
-  // ROUTES entry per (path, method) pair for clarity; paths just repeat.
-  { path: '/api/projects/star', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsStar', arg: 'authAndBody' },
-  { path: '/api/projects', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsSync', arg: 'auth' },
-  // connect mounts by path *prefix*, so this also matches /api/projects/star —
-  // harmless, since every route's method check below calls next() on a
-  // mismatch, letting the request fall through to the right one.
+  // routes that differ only by verb — or by an `action` field in a POST body —
+  // share one file in api/ (vercelRouteMulti). /api/projects's POST is one
+  // handler dispatching on body.action ('sync' | 'star' | 'update'); the dev
+  // middleware has no such limit, so it keeps one ROUTES entry per
+  // (path, method) pair for clarity.
+  { path: '/api/projects', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsPost', arg: 'authAndBody' },
   { path: '/api/projects', method: 'GET', module: '/server/projectRoutes.ts', export: 'handleProjectsList', arg: 'auth' },
   { path: '/api/specs', method: 'POST', module: '/server/specRoutes.ts', export: 'handleSpecsSync', arg: 'authAndBody' },
   { path: '/api/specs', method: 'GET', module: '/server/specRoutes.ts', export: 'handleSpecsList', arg: 'authAndQuery' },
   { path: '/api/submittals/run', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleRunSubmittal', arg: 'authAndBody' },
   { path: '/api/submittals', method: 'GET', module: '/server/submittalRoutes.ts', export: 'handleGetSubmittal', arg: 'authAndQuery' },
   { path: '/api/submittals', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleCreateSubmittal', arg: 'authAndBody' },
+  { path: '/api/checklist', method: 'GET', module: '/server/checklistRoutes.ts', export: 'handleChecklistStatus', arg: 'authAndQuery' },
+  { path: '/api/checklist', method: 'POST', module: '/server/checklistRoutes.ts', export: 'handleChecklistPost', arg: 'authAndBody' },
+  { path: '/api/flow-reports', method: 'GET', module: '/server/flowReportRoutes.ts', export: 'handleFlowReportsList', arg: 'authAndQuery' },
+  { path: '/api/flow-reports', method: 'POST', module: '/server/flowReportRoutes.ts', export: 'handleFlowReportsPost', arg: 'authAndBody' },
+  { path: '/api/tasks', method: 'GET', module: '/server/taskRoutes.ts', export: 'handleTasksList', arg: 'authAndQuery' },
+  { path: '/api/tasks', method: 'POST', module: '/server/taskRoutes.ts', export: 'handleTasksPost', arg: 'authAndBody' },
 ]
 
 // Non-secret URL vars have VITE_ fallbacks; forward both so `server/config.ts`
