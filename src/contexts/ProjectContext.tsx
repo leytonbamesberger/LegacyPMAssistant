@@ -17,6 +17,7 @@ import {
 import { useUnsavedWork } from './UnsavedWorkContext'
 
 const SELECTED_PROJECT_KEY = 'legacy-pm:selectedProjectId'
+const PROJECTS_CACHE_PREFIX = 'legacy-pm:projects:'
 
 interface PendingSwitch {
   /** The project being switched to, or null to deselect. Wrapped so "null" is
@@ -61,17 +62,53 @@ function writeStoredProjectId(id: string | null) {
   }
 }
 
+/**
+ * Cached per signed-in user (keyed by the stable MSAL account id, since a real
+ * `profiles` row doesn't exist client-side until ProfileContext's own async
+ * fetch resolves — using the account id lets this read happen synchronously,
+ * before any network round trip, so cards paint on the very first render
+ * instead of an empty-then-populated flash on every page load).
+ */
+function readStoredProjects(accountId: string | undefined): Project[] {
+  if (!accountId) return []
+  try {
+    const raw = localStorage.getItem(PROJECTS_CACHE_PREFIX + accountId)
+    return raw ? (JSON.parse(raw) as Project[]) : []
+  } catch {
+    return []
+  }
+}
+
+function writeStoredProjects(accountId: string | undefined, projects: Project[]) {
+  if (!accountId) return
+  try {
+    localStorage.setItem(PROJECTS_CACHE_PREFIX + accountId, JSON.stringify(projects))
+  } catch {
+    // Storage can be unavailable (private browsing, quota). Just means the
+    // next load falls back to the normal fetch-then-populate flow.
+  }
+}
+
 export function ProjectProvider({ children }: { children: ReactNode }) {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
   const { hasUnsavedWork } = useUnsavedWork()
 
-  const [projects, setProjects] = useState<Project[]>([])
+  // Lazily seeded from localStorage so, on a reload, previously-seen cards paint
+  // immediately instead of an empty grid while the network round trip is in flight.
+  const [projects, setProjects] = useState<Project[]>(() => readStoredProjects(account?.homeAccountId))
   const [selectedId, setSelectedId] = useState<string | null>(readStoredProjectId)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(() => readStoredProjects(account?.homeAccountId).length === 0)
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null)
+
+  // Keep the cache in sync with whatever's shown, regardless of which code path
+  // changed it (initial fetch, Procore sync, star toggle + its revert, ...) —
+  // one place to update rather than threading a write through every setter.
+  useEffect(() => {
+    writeStoredProjects(account?.homeAccountId, projects)
+  }, [account?.homeAccountId, projects])
 
   // On mount (once authenticated): show cached projects immediately, then
   // sync with Procore in the background without blocking anything above.
@@ -80,7 +117,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     void (async () => {
-      setLoading(true)
+      // Only show the loading state when there's nothing cached to show yet
+      // (this device's first-ever load for this user) — otherwise the cached
+      // cards stay on screen while this refetch happens quietly behind them.
+      if (readStoredProjects(account.homeAccountId).length === 0) setLoading(true)
       const cached = await fetchProjects(instance, account)
       if (!cancelled && cached) setProjects(cached)
       setLoading(false)

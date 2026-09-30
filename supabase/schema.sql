@@ -86,6 +86,43 @@ create table checklist_items (
   cadence_days int
 );
 
+-- `weekly` renamed to `recurring` (it now covers two cadence shapes, not just
+-- weekly ones — see cadence_type). project_id is null for the 10 shared
+-- defaults every project starts with, or set for one project's own custom
+-- recurring item — project_checklist_log.checklist_item_id points at either
+-- kind through the same column, no separate custom-items table.
+alter table checklist_items drop constraint checklist_items_phase_check;
+update checklist_items set phase = 'recurring' where phase = 'weekly';
+alter table checklist_items add constraint checklist_items_phase_check check (phase in ('setup', 'recurring', 'closeout'));
+
+alter table checklist_items
+  add column cadence_type text check (cadence_type in ('rolling', 'calendar_month')),
+  add column project_id uuid references projects(id);
+
+update checklist_items set cadence_type = 'rolling' where phase = 'recurring';
+
+create index checklist_items_project_id_idx on checklist_items (project_id);
+
+-- New calendar-month default recurring items: due once per actual calendar
+-- month, unrelated to the flow report's own month field. "Done" here means
+-- logged at least once since the 1st of the current calendar month — see
+-- getChecklistStatusForProjects in server/checklist.ts — not a cadence_days
+-- comparison like the rolling items use.
+insert into checklist_items (phase, name, sort_order, cadence_days, cadence_type) values
+  ('recurring', 'Forecasted', 7, null, 'calendar_month'),
+  ('recurring', 'Projections Updated', 8, null, 'calendar_month'),
+  ('recurring', 'Snapshots Taken', 9, null, 'calendar_month'),
+  ('recurring', 'Sent to ERP', 10, null, 'calendar_month');
+
+-- project_checklist_item_exclusions: a project hiding one of the shared
+-- (project_id is null) default recurring items from its own Recurring list.
+-- Doesn't apply to custom items — those already belong to one project only.
+create table project_checklist_item_exclusions (
+  project_id uuid references projects(id) not null,
+  checklist_item_id uuid references checklist_items(id) not null,
+  primary key (project_id, checklist_item_id)
+);
+
 -- project_checklist_log: one row per completion event. For setup/closeout
 -- items, the presence of any row = done. For weekly items this is a running
 -- history — checking one off inserts a new row rather than updating the
@@ -101,6 +138,19 @@ create table project_checklist_log (
 
 create index project_checklist_log_project_id_idx on project_checklist_log (project_id);
 create index project_checklist_log_checklist_item_id_idx on project_checklist_log (checklist_item_id);
+
+-- project_checklist_schedule: a future-dated marker for a recurring item,
+-- shown on the calendar panel. One row per (project, item) — setting a new
+-- date overwrites it, doesn't append. Unlike setup items (where a date IS a
+-- completion, written to project_checklist_log), this does NOT mark the item
+-- done — recurring items still need their own separate check-off each cycle,
+-- and completing one doesn't touch or clear this row.
+create table project_checklist_schedule (
+  project_id uuid references projects(id) not null,
+  checklist_item_id uuid references checklist_items(id) not null,
+  scheduled_date date not null,
+  primary key (project_id, checklist_item_id)
+);
 
 -- flow_reports: one row per project per month. `answers` holds one key per
 -- FLOW-letter question (Change Proposals, RFIs, Submittals, Applications for
@@ -120,6 +170,25 @@ create table flow_reports (
 );
 
 create index flow_reports_project_id_idx on flow_reports (project_id);
+
+-- due_date dropped: it's always the last calendar day of `month`, computed
+-- in application code (see server/flowReports.ts) — nothing to store, so
+-- nothing to drift out of sync or need an editable field for.
+alter table flow_reports drop column due_date;
+
+-- margin_fade_notes/underbilled_notes: free text, optional, blank by
+-- default. Non-empty values are what the PDF export's "Flagged Items"
+-- section on the cover page surfaces (see the export tool).
+alter table flow_reports
+  add column margin_fade_notes text,
+  add column underbilled_notes text;
+
+-- attn/company: free text, optional. Map to the letter header's "Attn:" and
+-- "Company:" lines. Unlike the numbered FLOW questions (which default to
+-- "None." when blank), these render as an empty line when unset.
+alter table flow_reports
+  add column attn text,
+  add column company text;
 
 -- tasks: type = 'project' | 'person' | 'personal'. project_id is settable
 -- regardless of type (a personal task can still reference a project).
@@ -152,6 +221,16 @@ create table tasks (
 create index tasks_assigned_to_idx on tasks (assigned_to);
 create index tasks_assigned_by_idx on tasks (assigned_by);
 create index tasks_project_id_idx on tasks (project_id);
+
+-- Personal recurring tasks: is_recurring = true means this task never
+-- reaches status = 'done'. Completing it sets last_completed_at = now()
+-- instead, and due/overdue is derived from last_completed_at + cadence_days
+-- vs now() at read time (same pattern as the rolling checklist items use),
+-- not persisted. Non-recurring tasks are unaffected — status still governs.
+alter table tasks
+  add column is_recurring boolean not null default false,
+  add column cadence_days int,
+  add column last_completed_at timestamptz;
 
 -- Seed the master checklist (mirrors the existing spreadsheet categories).
 -- Run once; re-running is safe to skip if rows already exist.
@@ -301,6 +380,8 @@ alter table submittal_checks enable row level security;
 alter table ai_usage_logs enable row level security;
 alter table checklist_items enable row level security;
 alter table project_checklist_log enable row level security;
+alter table project_checklist_item_exclusions enable row level security;
+alter table project_checklist_schedule enable row level security;
 alter table flow_reports enable row level security;
 alter table tasks enable row level security;
 

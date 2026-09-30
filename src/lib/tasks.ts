@@ -14,6 +14,9 @@ export interface Task {
   visibility: 'private' | 'public'
   created_at: string
   completed_at: string | null
+  is_recurring: boolean
+  cadence_days: number | null
+  last_completed_at: string | null
 }
 
 export interface NewTaskInput {
@@ -24,6 +27,16 @@ export interface NewTaskInput {
   dueDate: string | null
   assignedTo: string
   visibility: 'private' | 'public'
+  isRecurring: boolean
+  cadenceDays: number | null
+}
+
+/** A recurring task's due/overdue state is derived, never persisted in `status`. */
+export function isRecurringTaskDue(task: Task): boolean {
+  if (!task.is_recurring || task.cadence_days === null) return false
+  if (!task.last_completed_at) return true
+  const dueAt = new Date(task.last_completed_at).getTime() + task.cadence_days * 24 * 60 * 60 * 1000
+  return Date.now() >= dueAt
 }
 
 export async function fetchTasks(
@@ -57,6 +70,7 @@ export async function createTask(
   return (body as { task: Task } | null)?.task ?? null
 }
 
+/** Non-recurring tasks only — flips `status`. Use completeRecurringTask for recurring ones. */
 export async function setTaskStatus(
   instance: IPublicClientApplication,
   account: AccountInfo,
@@ -64,6 +78,16 @@ export async function setTaskStatus(
   status: 'open' | 'done',
 ): Promise<boolean> {
   const body = await postTaskAction(instance, account, { action: 'set-status', taskId, status })
+  return body !== null
+}
+
+/** Recurring tasks only — bumps last_completed_at, leaves status untouched (never reaches 'done'). */
+export async function completeRecurringTask(
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  taskId: string,
+): Promise<boolean> {
+  const body = await postTaskAction(instance, account, { action: 'complete-recurring', taskId })
   return body !== null
 }
 

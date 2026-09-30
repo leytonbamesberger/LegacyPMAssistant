@@ -69,6 +69,15 @@ export function RatingIcon(props: SVGProps<SVGSVGElement>) {
   )
 }
 
+export function CalendarIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3.5" y="5" width="17" height="15" rx="2" />
+      <path d="M3.5 9.5h17M8 3v4M16 3v4" />
+    </svg>
+  )
+}
+
 export function DashboardIcon(props: SVGProps<SVGSVGElement>) {
   return (
     <svg {...base} {...props}>
@@ -115,6 +124,15 @@ export function StarIcon({
   return (
     <svg {...base} {...props} fill={filled ? 'currentColor' : 'none'}>
       <path d="m12 4 2.3 4.7 5.2.8-3.8 3.7.9 5.2-4.6-2.4-4.6 2.4.9-5.2L4 9.5l5.2-.8L12 4Z" />
+    </svg>
+  )
+}
+
+export function ChecklistPanelIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg {...base} {...props}>
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+      <path d="m8 12 2.5 2.5L16 9" />
     </svg>
   )
 }

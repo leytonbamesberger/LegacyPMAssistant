@@ -1,8 +1,6 @@
 import { useMemo, useState } from 'react'
-import type { FormEvent } from 'react'
 import type { Project } from '../lib/projects'
-import type { ProfileDirectoryEntry } from '../lib/profiles'
-import type { NewTaskInput, Task } from '../lib/tasks'
+import { isRecurringTaskDue, type Task } from '../lib/tasks'
 
 const TYPE_LABEL: Record<Task['type'], string> = {
   project: 'Project',
@@ -13,24 +11,23 @@ const TYPE_LABEL: Record<Task['type'], string> = {
 export function MyTasksSection({
   tasks,
   projects,
-  directory,
   nameFor,
   currentProfileId,
-  onCreate,
+  onAddTask,
   onSetStatus,
+  onCompleteRecurring,
   onDelete,
 }: {
   tasks: Task[]
   projects: Project[]
-  directory: ProfileDirectoryEntry[]
   nameFor: (profileId: string | null) => string
   currentProfileId: string | null
-  onCreate: (fields: NewTaskInput) => Promise<void>
+  onAddTask: () => void
   onSetStatus: (taskId: string, status: 'open' | 'done') => Promise<void>
+  onCompleteRecurring: (taskId: string) => Promise<void>
   onDelete: (taskId: string) => Promise<void>
 }) {
   const [projectFilter, setProjectFilter] = useState<string>('all')
-  const [showAddForm, setShowAddForm] = useState(false)
 
   const taskProjectIds = useMemo(
     () => Array.from(new Set(tasks.map((t) => t.project_id).filter((id): id is string => !!id))),
@@ -45,7 +42,9 @@ export function MyTasksSection({
   })
 
   const sorted = [...filtered].sort((a, b) => {
-    if (a.status !== b.status) return a.status === 'open' ? -1 : 1
+    const aOpen = a.is_recurring || a.status === 'open'
+    const bOpen = b.is_recurring || b.status === 'open'
+    if (aOpen !== bOpen) return aOpen ? -1 : 1
     if (!a.due_date) return 1
     if (!b.due_date) return -1
     return a.due_date.localeCompare(b.due_date)
@@ -62,24 +61,12 @@ export function MyTasksSection({
         </div>
         <button
           type="button"
-          onClick={() => setShowAddForm((v) => !v)}
+          onClick={onAddTask}
           className="rounded-full border border-legacy-blue-light/30 px-3 py-1.5 text-xs font-medium text-legacy-blue-dark hover:border-legacy-blue-dark"
         >
-          {showAddForm ? 'Cancel' : '+ Add Task'}
+          + Add Task
         </button>
       </div>
-
-      {showAddForm && (
-        <AddTaskForm
-          projects={projects}
-          directory={directory}
-          currentProfileId={currentProfileId}
-          onCreate={async (fields) => {
-            await onCreate(fields)
-            setShowAddForm(false)
-          }}
-        />
-      )}
 
       {taskProjectIds.length > 0 && (
         <select
@@ -109,6 +96,7 @@ export function MyTasksSection({
               nameFor={nameFor}
               currentProfileId={currentProfileId}
               onSetStatus={onSetStatus}
+              onCompleteRecurring={onCompleteRecurring}
               onDelete={onDelete}
             />
           ))
@@ -124,6 +112,7 @@ function TaskRow({
   nameFor,
   currentProfileId,
   onSetStatus,
+  onCompleteRecurring,
   onDelete,
 }: {
   task: Task
@@ -131,29 +120,43 @@ function TaskRow({
   nameFor: (profileId: string | null) => string
   currentProfileId: string | null
   onSetStatus: (taskId: string, status: 'open' | 'done') => Promise<void>
+  onCompleteRecurring: (taskId: string) => Promise<void>
   onDelete: (taskId: string) => Promise<void>
 }) {
   const isMine = task.assigned_to === currentProfileId
   const handedOff = !isMine
+  const due = isRecurringTaskDue(task)
 
   return (
     <div className="flex items-start gap-2 px-3 py-2.5">
       <input
         type="checkbox"
-        checked={task.status === 'done'}
-        onChange={(e) => void onSetStatus(task.id, e.target.checked ? 'done' : 'open')}
+        checked={task.is_recurring ? false : task.status === 'done'}
+        onChange={(e) =>
+          task.is_recurring
+            ? void onCompleteRecurring(task.id)
+            : void onSetStatus(task.id, e.target.checked ? 'done' : 'open')
+        }
+        title={task.is_recurring ? 'Mark complete for now — resets when due again' : undefined}
         className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-legacy-blue-dark"
       />
       <div className="min-w-0 flex-1">
         <div
-          className={`text-sm ${task.status === 'done' ? 'text-legacy-blue-light line-through' : 'text-legacy-blue-dark'}`}
+          className={`text-sm ${!task.is_recurring && task.status === 'done' ? 'text-legacy-blue-light line-through' : 'text-legacy-blue-dark'}`}
         >
           {task.title}
         </div>
         <div className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-legacy-blue-light">
           <span>{TYPE_LABEL[task.type]}</span>
           {projectName && <span>· {projectName}</span>}
-          {task.due_date && <span>· Due {formatDate(task.due_date)}</span>}
+          {task.is_recurring ? (
+            <span className={due ? 'font-medium text-legacy-red' : ''}>
+              · {due ? 'Due now' : `Every ${task.cadence_days}d`}
+              {task.last_completed_at && ` · Last: ${formatDate(task.last_completed_at)}`}
+            </span>
+          ) : (
+            task.due_date && <span>· Due {formatDate(task.due_date)}</span>
+          )}
           {handedOff && <span>· For {nameFor(task.assigned_to)}</span>}
           {isMine && task.assigned_by && task.assigned_by !== task.assigned_to && (
             <span>· Assigned by {nameFor(task.assigned_by)}</span>
@@ -169,114 +172,6 @@ function TaskRow({
         ×
       </button>
     </div>
-  )
-}
-
-function AddTaskForm({
-  projects,
-  directory,
-  currentProfileId,
-  onCreate,
-}: {
-  projects: Project[]
-  directory: ProfileDirectoryEntry[]
-  currentProfileId: string | null
-  onCreate: (fields: NewTaskInput) => Promise<void>
-}) {
-  const [title, setTitle] = useState('')
-  const [type, setType] = useState<Task['type']>('personal')
-  const [projectId, setProjectId] = useState('')
-  const [assignedTo, setAssignedTo] = useState(currentProfileId ?? '')
-  const [dueDate, setDueDate] = useState('')
-  const [visibility, setVisibility] = useState<'private' | 'public'>('private')
-  const [saving, setSaving] = useState(false)
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault()
-    if (!title.trim() || !assignedTo || saving) return
-    setSaving(true)
-    await onCreate({
-      type,
-      projectId: projectId || null,
-      title: title.trim(),
-      description: null,
-      dueDate: dueDate || null,
-      assignedTo,
-      visibility,
-    })
-    setSaving(false)
-  }
-
-  return (
-    <form
-      onSubmit={(e) => void handleSubmit(e)}
-      className="mt-3 space-y-2 rounded-lg border border-legacy-blue-light/25 bg-legacy-blue-light/5 p-3"
-    >
-      <input
-        type="text"
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Task title"
-        className="w-full rounded border border-legacy-blue-light/30 px-2 py-1.5 text-sm text-legacy-blue-dark focus:border-legacy-blue-dark focus:outline-none"
-      />
-      <div className="flex flex-wrap gap-2">
-        <select
-          value={type}
-          onChange={(e) => setType(e.target.value as Task['type'])}
-          className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-        >
-          <option value="personal">Personal</option>
-          <option value="person">Person</option>
-          <option value="project">Project</option>
-        </select>
-        <select
-          value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-        >
-          <option value="">No Project</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <select
-          value={assignedTo}
-          onChange={(e) => setAssignedTo(e.target.value)}
-          className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-        >
-          {directory.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.id === currentProfileId ? 'Me' : (p.display_name ?? 'Unnamed')}
-            </option>
-          ))}
-        </select>
-        <input
-          type="date"
-          value={dueDate}
-          onChange={(e) => setDueDate(e.target.value)}
-          className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-        />
-        {type === 'personal' && (
-          <select
-            value={visibility}
-            onChange={(e) => setVisibility(e.target.value as 'private' | 'public')}
-            className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-          >
-            <option value="private">Private</option>
-            <option value="public">Public</option>
-          </select>
-        )}
-      </div>
-      <button
-        type="submit"
-        disabled={saving || !title.trim()}
-        className="rounded-full bg-legacy-blue-dark px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
-      >
-        Add Task
-      </button>
-    </form>
   )
 }
 

@@ -3,16 +3,16 @@ import type { Project } from '../lib/projects'
 import type { ProjectChecklistStatus } from '../lib/checklist'
 import type { FlowReport } from '../lib/flowReports'
 import type { ProfileDirectoryEntry } from '../lib/profiles'
-import type { Task } from '../lib/tasks'
-import { SetupCloseoutBadge, WeeklyBadge } from './ProjectChecklistBadge'
+import { isRecurringTaskDue, type Task } from '../lib/tasks'
+import { RecurringBadge, SetupCloseoutBadge } from './ProjectChecklistBadge'
 
-const FLOW_STATUS_LABEL: Record<FlowReport['status'], string> = {
+export const FLOW_STATUS_LABEL: Record<FlowReport['status'], string> = {
   not_started: 'Flow: Not Started',
   in_progress: 'Flow: In Progress',
   completed: 'Flow: Completed',
 }
 
-const FLOW_STATUS_CLASS: Record<FlowReport['status'], string> = {
+export const FLOW_STATUS_CLASS: Record<FlowReport['status'], string> = {
   not_started: 'border border-legacy-blue-light/25 text-legacy-blue-light',
   in_progress: 'border border-legacy-red/50 text-legacy-red',
   completed: 'border border-legacy-blue-light/25 bg-legacy-blue-light/5 text-legacy-blue-dark',
@@ -26,9 +26,15 @@ export function ProjectCard({
   directory,
   nameFor,
   onToggleChecklistItem,
-  onLogWeeklyItem,
+  onLogChecklistItem,
+  onAddCustomChecklistItem,
+  onRemoveChecklistItem,
+  onSetSetupDate,
+  onSetSchedule,
   onReassign,
   onCompleteTask,
+  onOpenFlowReport,
+  onAddTask,
 }: {
   project: Project
   checklist: ProjectChecklistStatus | undefined
@@ -37,30 +43,36 @@ export function ProjectCard({
   directory: ProfileDirectoryEntry[]
   nameFor: (profileId: string | null) => string
   onToggleChecklistItem: (checklistItemId: string, done: boolean) => void
-  onLogWeeklyItem: (checklistItemId: string) => void
+  onLogChecklistItem: (checklistItemId: string) => void
+  onAddCustomChecklistItem: (
+    name: string,
+    cadenceType: 'rolling' | 'calendar_month',
+    cadenceDays: number | null,
+  ) => void
+  onRemoveChecklistItem: (checklistItemId: string) => void
+  onSetSetupDate: (checklistItemId: string, date: string) => void
+  onSetSchedule: (checklistItemId: string, date: string | null) => void
   onReassign: (field: 'pm_id' | 'apm_id', profileId: string | null) => void
   onCompleteTask: (taskId: string) => void
+  onOpenFlowReport: () => void
+  onAddTask: () => void
 }) {
   const showCloseout = project.status === 'closing' || project.status === 'closed'
+  const hasChecklist = project.checklist_enabled && Boolean(checklist)
+  const hasTasks = myOpenTasks.length > 0
 
   return (
-    <div className="rounded-lg border border-legacy-blue-light/25 bg-white p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-base font-semibold text-legacy-blue-dark">
-            {project.name}
-          </h3>
-          <p className="text-xs text-legacy-blue-light">
-            {project.job_number ?? 'No job number'}
-            {project.gc ? ` · ${project.gc}` : ''}
-          </p>
-        </div>
-        {project.status !== 'active' && (
-          <span className="shrink-0 rounded-full border border-legacy-red/40 px-2 py-0.5 text-xs font-medium capitalize text-legacy-red">
-            {project.status}
-          </span>
-        )}
-      </div>
+    <div className="relative rounded-lg border border-legacy-blue-light/25 bg-white p-4">
+      {project.status !== 'active' && (
+        <span className="absolute right-4 top-4 shrink-0 rounded-full border border-legacy-red/40 px-2 py-0.5 text-xs font-medium capitalize text-legacy-red">
+          {project.status}
+        </span>
+      )}
+
+      <h3 className="text-center text-base font-semibold text-legacy-blue-dark">
+        {project.name}
+      </h3>
+      {project.gc && <p className="text-xs text-legacy-blue-light">{project.gc}</p>}
 
       <div className="mt-3 flex flex-wrap gap-4 text-xs">
         <AssigneePicker
@@ -79,56 +91,104 @@ export function ProjectCard({
         />
       </div>
 
-      {project.checklist_enabled && checklist && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <SetupCloseoutBadge
-            phase="setup"
-            items={checklist.setup}
-            onToggle={onToggleChecklistItem}
-            nameFor={nameFor}
-          />
-          <WeeklyBadge items={checklist.weekly} onLog={onLogWeeklyItem} />
-          {showCloseout && (
-            <SetupCloseoutBadge
-              phase="closeout"
-              items={checklist.closeout}
-              onToggle={onToggleChecklistItem}
-              nameFor={nameFor}
-            />
+      {(hasChecklist || flowReportStatus) && (
+        <div className="mt-3 flex flex-wrap items-start gap-2">
+          {hasChecklist && checklist && (
+            <>
+              <SetupCloseoutBadge
+                phase="setup"
+                items={checklist.setup}
+                onToggle={onToggleChecklistItem}
+                onSetDate={onSetSetupDate}
+                nameFor={nameFor}
+              />
+              <RecurringBadge
+                items={checklist.recurring}
+                onLog={onLogChecklistItem}
+                onRemove={onRemoveChecklistItem}
+                onAddCustom={onAddCustomChecklistItem}
+                onSetSchedule={onSetSchedule}
+              />
+              {showCloseout && (
+                <SetupCloseoutBadge
+                  phase="closeout"
+                  items={checklist.closeout}
+                  onToggle={onToggleChecklistItem}
+                  nameFor={nameFor}
+                />
+              )}
+            </>
+          )}
+          {flowReportStatus && (
+            <button
+              type="button"
+              onClick={onOpenFlowReport}
+              className={`rounded-full px-2.5 py-1 text-xs font-medium transition hover:ring-1 hover:ring-legacy-blue-dark/30 ${FLOW_STATUS_CLASS[flowReportStatus]}`}
+            >
+              {FLOW_STATUS_LABEL[flowReportStatus]}
+            </button>
           )}
         </div>
       )}
 
-      {flowReportStatus && (
-        <div className="mt-2">
-          <span
-            className={`rounded-full px-2.5 py-1 text-xs font-medium ${FLOW_STATUS_CLASS[flowReportStatus]}`}
-          >
-            {FLOW_STATUS_LABEL[flowReportStatus]}
-          </span>
+      {hasTasks ? (
+        <div className="mt-3 border-t border-legacy-blue-light/15 pt-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-legacy-blue-light">Tasks</span>
+            <AddTaskButton onClick={onAddTask} />
+          </div>
+          <ul className="mt-1 space-y-1">
+            {myOpenTasks.map((task) => (
+              <li key={task.id} className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={task.is_recurring ? false : task.status === 'done'}
+                  onChange={() => onCompleteTask(task.id)}
+                  title={task.is_recurring ? 'Mark complete for now — resets when due again' : undefined}
+                  className="h-3.5 w-3.5 shrink-0 accent-legacy-blue-dark"
+                />
+                <span className="text-legacy-blue-dark">{task.title}</span>
+                {task.is_recurring ? (
+                  <span
+                    className={isRecurringTaskDue(task) ? 'font-medium text-legacy-red' : 'text-legacy-blue-light'}
+                  >
+                    · {isRecurringTaskDue(task) ? 'Due now' : `Every ${task.cadence_days}d`}
+                  </span>
+                ) : (
+                  task.due_date && (
+                    <span className="text-legacy-blue-light">
+                      · Due{' '}
+                      {new Date(task.due_date).toLocaleDateString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                      })}
+                    </span>
+                  )
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div className="mt-3 flex justify-end">
+          <AddTaskButton onClick={onAddTask} />
         </div>
       )}
-
-      {myOpenTasks.length > 0 && (
-        <ul className="mt-3 space-y-1 border-t border-legacy-blue-light/15 pt-2">
-          {myOpenTasks.map((task) => (
-            <li key={task.id} className="flex items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                onChange={() => onCompleteTask(task.id)}
-                className="h-3.5 w-3.5 shrink-0 accent-legacy-blue-dark"
-              />
-              <span className="text-legacy-blue-dark">{task.title}</span>
-              {task.due_date && (
-                <span className="text-legacy-blue-light">
-                  · Due {new Date(task.due_date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
+  )
+}
+
+function AddTaskButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Add task"
+      aria-label="Add task"
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-legacy-blue-light/30 text-sm leading-none text-legacy-blue-light hover:border-legacy-blue-dark hover:text-legacy-blue-dark"
+    >
+      +
+    </button>
   )
 }
 

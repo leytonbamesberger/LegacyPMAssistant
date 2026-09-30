@@ -1,6 +1,12 @@
 import { ApiResult } from './http.js'
 import { resolveProfile } from './auth.js'
-import { createTask, deleteTask, getTasksForProfile, setTaskStatus } from './tasks.js'
+import {
+  completeRecurringTask,
+  createTask,
+  deleteTask,
+  getTasksForProfile,
+  setTaskStatus,
+} from './tasks.js'
 
 /** GET /api/tasks?projectId=X — every task visible to the caller, optionally scoped to one project. */
 export async function handleTasksList(
@@ -43,6 +49,8 @@ async function handleTasksCreate(
     dueDate?: unknown
     assignedTo?: unknown
     visibility?: unknown
+    isRecurring?: unknown
+    cadenceDays?: unknown
   }
 
   if (!TASK_TYPES.includes(raw.type as (typeof TASK_TYPES)[number])) {
@@ -76,6 +84,16 @@ async function handleTasksCreate(
       json: { error: `"visibility" must be one of: ${TASK_VISIBILITIES.join(', ')}` },
     }
   }
+  const isRecurring = raw.isRecurring === true
+  if (
+    isRecurring &&
+    (typeof raw.cadenceDays !== 'number' || !Number.isFinite(raw.cadenceDays) || raw.cadenceDays <= 0)
+  ) {
+    return {
+      status: 400,
+      json: { error: '"cadenceDays" must be a positive number when isRecurring is true' },
+    }
+  }
 
   try {
     const task = await createTask(resolved.admin, resolved.profileId, {
@@ -86,6 +104,8 @@ async function handleTasksCreate(
       dueDate: (raw.dueDate ?? null) as string | null,
       assignedTo: raw.assignedTo,
       visibility: (raw.visibility ?? 'private') as 'private' | 'public',
+      isRecurring,
+      cadenceDays: isRecurring ? (raw.cadenceDays as number) : null,
     })
     return { status: 200, json: { task } }
   } catch (err) {
@@ -129,6 +149,33 @@ async function handleTasksSetStatus(
   }
 }
 
+/** The 'complete-recurring' action of POST /api/tasks — body { taskId }. Bumps last_completed_at, leaves status alone. */
+async function handleTasksCompleteRecurring(
+  authorizationHeader: string | undefined,
+  body: unknown,
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+
+  const { taskId } = (body ?? {}) as { taskId?: unknown }
+  if (typeof taskId !== 'string') {
+    return { status: 400, json: { error: '"taskId" (string) is required' } }
+  }
+
+  try {
+    await completeRecurringTask(resolved.admin, taskId, resolved.profileId)
+    return { status: 200, json: { ok: true } }
+  } catch (err) {
+    return {
+      status: 500,
+      json: {
+        error: 'Could not complete recurring task',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+    }
+  }
+}
+
 /** The 'delete' action of POST /api/tasks — body { taskId }. */
 async function handleTasksDelete(
   authorizationHeader: string | undefined,
@@ -157,7 +204,8 @@ async function handleTasksDelete(
 }
 
 /**
- * POST /api/tasks — action dispatch: { action: 'create' | 'set-status' | 'delete', ... }.
+ * POST /api/tasks — action dispatch:
+ * { action: 'create' | 'set-status' | 'complete-recurring' | 'delete', ... }.
  * See the Hobby-plan function-count note in vercelAdapter.ts.
  */
 export async function handleTasksPost(
@@ -170,9 +218,14 @@ export async function handleTasksPost(
       return handleTasksCreate(authorizationHeader, body)
     case 'set-status':
       return handleTasksSetStatus(authorizationHeader, body)
+    case 'complete-recurring':
+      return handleTasksCompleteRecurring(authorizationHeader, body)
     case 'delete':
       return handleTasksDelete(authorizationHeader, body)
     default:
-      return { status: 400, json: { error: '"action" must be "create", "set-status", or "delete"' } }
+      return {
+        status: 400,
+        json: { error: '"action" must be "create", "set-status", "complete-recurring", or "delete"' },
+      }
   }
 }

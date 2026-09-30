@@ -1,23 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMsal } from '@azure/msal-react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useProject } from '../contexts/ProjectContext'
 import { useProfile } from '../contexts/ProfileContext'
-import {
-  fetchChecklistStatus,
-  logWeeklyChecklistItem,
-  setChecklistItemDone,
-  type ProjectChecklistStatus,
-} from '../lib/checklist'
-import {
-  fetchCurrentFlowReports,
-  saveFlowReportDraft,
-  submitFlowReport,
-  type FlowReport,
-  type FlowReportAnswers,
-} from '../lib/flowReports'
+import { useChecklist } from '../contexts/ChecklistContext'
+import { useFlowReport } from '../contexts/FlowReportContext'
 import { updateProject, type Project } from '../lib/projects'
 import {
+  completeRecurringTask,
   createTask,
   deleteTask,
   fetchTasks,
@@ -28,107 +18,56 @@ import {
 import { ProjectCard } from '../components/ProjectCard'
 import { FlowReportsSection } from '../components/FlowReportsSection'
 import { MyTasksSection } from '../components/MyTasksSection'
+import { AddTaskModal } from '../components/AddTaskModal'
 
 export function ProjectDashboard() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
   const { projects, refreshProjects } = useProject()
   const { profile, directory, nameFor } = useProfile()
+  const location = useLocation()
 
   const starredProjects = useMemo(() => projects.filter((p) => p.isStarred), [projects])
-  const starredIds = useMemo(() => starredProjects.map((p) => p.id), [starredProjects])
-  const starredIdsKey = starredIds.join(',')
 
-  const [checklistByProject, setChecklistByProject] = useState<
-    Record<string, ProjectChecklistStatus>
-  >({})
-  const [checklistLoading, setChecklistLoading] = useState(true)
+  const {
+    checklistByProject,
+    loading: checklistLoading,
+    toggleItem: handleToggleChecklistItem,
+    logItem: handleLogChecklistItem,
+    addCustomItem: handleAddCustomChecklistItem,
+    removeItem: handleRemoveChecklistItem,
+    setSetupDate: handleSetSetupDate,
+    setSchedule: handleSetSchedule,
+  } = useChecklist()
 
-  const [flowReports, setFlowReports] = useState<FlowReport[]>([])
-  const [flowReportsLoading, setFlowReportsLoading] = useState(true)
+  const {
+    flowReports,
+    loading: flowReportsLoading,
+    statusByProject: flowStatusByProject,
+    openFlowReportModal,
+  } = useFlowReport()
 
   const [tasks, setTasks] = useState<Task[]>([])
 
-  const loadChecklist = useCallback(async () => {
-    if (!account || starredIds.length === 0) {
-      setChecklistByProject({})
-      setChecklistLoading(false)
-      return
-    }
-    setChecklistLoading(true)
-    const statuses = await fetchChecklistStatus(instance, account, starredIds)
-    if (statuses) {
-      setChecklistByProject(Object.fromEntries(statuses.map((s) => [s.projectId, s])))
-    }
-    setChecklistLoading(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instance, account, starredIdsKey])
+  const [addTaskModalProjectId, setAddTaskModalProjectId] = useState<string | null>(null)
+  const [addTaskModalOpen, setAddTaskModalOpen] = useState(false)
 
-  const loadFlowReports = useCallback(async () => {
-    if (!account || starredIds.length === 0) {
-      setFlowReports([])
-      setFlowReportsLoading(false)
-      return
-    }
-    setFlowReportsLoading(true)
-    const reports = await fetchCurrentFlowReports(instance, account, starredIds)
-    if (reports) setFlowReports(reports)
-    setFlowReportsLoading(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instance, account, starredIdsKey])
-
-  const loadTasks = useCallback(async () => {
+  async function loadTasks() {
     if (!account) return
     const result = await fetchTasks(instance, account)
     if (result) setTasks(result)
-  }, [instance, account])
-
-  useEffect(() => {
-    void loadChecklist()
-  }, [loadChecklist])
-
-  useEffect(() => {
-    void loadFlowReports()
-  }, [loadFlowReports])
+  }
 
   useEffect(() => {
     void loadTasks()
-  }, [loadTasks])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instance, account])
 
-  async function handleToggleChecklistItem(
-    projectId: string,
-    checklistItemId: string,
-    done: boolean,
-  ) {
-    if (!account) return
-    // Optimistic update.
-    setChecklistByProject((prev) => {
-      const status = prev[projectId]
-      if (!status) return prev
-      const patchPhase = (items: ProjectChecklistStatus['setup']) =>
-        items.map((s) =>
-          s.item.id === checklistItemId
-            ? { ...s, done, completedAt: done ? new Date().toISOString() : null }
-            : s,
-        )
-      return {
-        ...prev,
-        [projectId]: {
-          ...status,
-          setup: patchPhase(status.setup),
-          closeout: patchPhase(status.closeout),
-        },
-      }
-    })
-    const ok = await setChecklistItemDone(instance, account, projectId, checklistItemId, done)
-    if (!ok) void loadChecklist()
-  }
-
-  async function handleLogWeeklyItem(projectId: string, checklistItemId: string) {
-    if (!account) return
-    const ok = await logWeeklyChecklistItem(instance, account, projectId, checklistItemId)
-    if (ok) void loadChecklist()
-  }
+  // Deep link from the calendar panel's "Flow Reports Due" entry.
+  useEffect(() => {
+    if (location.hash !== '#flow-reports' || flowReportsLoading) return
+    document.getElementById('flow-reports')?.scrollIntoView({ behavior: 'smooth' })
+  }, [location.hash, flowReportsLoading])
 
   async function handleReassign(
     project: Project,
@@ -139,37 +78,6 @@ export function ProjectDashboard() {
     const ok = await updateProject(instance, account, project.id, { [field]: profileId })
     if (ok) void refreshProjects()
   }
-
-  async function handleSaveFlowReport(
-    projectId: string,
-    month: string,
-    answers: FlowReportAnswers,
-    dueDate: string | null,
-  ) {
-    if (!account) return
-    const report = await saveFlowReportDraft(instance, account, projectId, month, answers, dueDate)
-    if (report) {
-      setFlowReports((prev) => prev.map((r) => (r.project_id === projectId ? report : r)))
-    }
-  }
-
-  async function handleSubmitFlowReport(
-    projectId: string,
-    month: string,
-    answers: FlowReportAnswers,
-    dueDate: string | null,
-  ) {
-    if (!account) return
-    const report = await submitFlowReport(instance, account, projectId, month, answers, dueDate)
-    if (report) {
-      setFlowReports((prev) => prev.map((r) => (r.project_id === projectId ? report : r)))
-    }
-  }
-
-  const flowStatusByProject = useMemo(
-    () => Object.fromEntries(flowReports.map((r) => [r.project_id, r.status])),
-    [flowReports],
-  )
 
   const openTasksByProject = useMemo(() => {
     const map: Record<string, Task[]> = {}
@@ -193,6 +101,21 @@ export function ProjectDashboard() {
     if (!ok) void loadTasks()
   }
 
+  async function handleCompleteRecurringTask(taskId: string) {
+    if (!account) return
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, last_completed_at: new Date().toISOString() } : t)),
+    )
+    const ok = await completeRecurringTask(instance, account, taskId)
+    if (!ok) void loadTasks()
+  }
+
+  function completeTask(taskId: string) {
+    const task = tasks.find((t) => t.id === taskId)
+    if (task?.is_recurring) void handleCompleteRecurringTask(taskId)
+    else void handleSetTaskStatus(taskId, 'done')
+  }
+
   async function handleDeleteTask(taskId: string) {
     if (!account) return
     setTasks((prev) => prev.filter((t) => t.id !== taskId))
@@ -200,22 +123,34 @@ export function ProjectDashboard() {
     if (!ok) void loadTasks()
   }
 
+  function openAddTaskModal(projectId: string | null) {
+    setAddTaskModalProjectId(projectId)
+    setAddTaskModalOpen(true)
+  }
+
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-10">
-      <Link to="/tools" className="text-xs text-legacy-blue-light hover:underline">
-        ← Back to Tools
-      </Link>
-      <h1 className="mt-1 text-xl font-semibold text-legacy-blue-dark">Project Dashboard</h1>
-      <p className="mt-1 text-sm text-legacy-blue-light">
-        Checklist and flow report status for your starred projects.
-      </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-legacy-blue-dark">Project Dashboard</h1>
+          <p className="mt-1 text-sm text-legacy-blue-light">
+            Checklist and flow report status for your starred projects.
+          </p>
+        </div>
+        <Link
+          to="/organization/export"
+          className="shrink-0 rounded-full border border-legacy-blue-light/30 px-3 py-1.5 text-xs font-medium text-legacy-blue-dark hover:border-legacy-blue-dark"
+        >
+          Export Flow Reports
+        </Link>
+      </div>
 
       {starredProjects.length === 0 ? (
         <p className="mt-8 text-sm text-legacy-blue-light">
           No starred projects yet. Star a project from the sidebar to see it here.
         </p>
       ) : (
-        <div className="mt-8 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {starredProjects.map((project) => (
             <ProjectCard
               key={project.id}
@@ -228,9 +163,17 @@ export function ProjectDashboard() {
               onToggleChecklistItem={(itemId, done) =>
                 void handleToggleChecklistItem(project.id, itemId, done)
               }
-              onLogWeeklyItem={(itemId) => void handleLogWeeklyItem(project.id, itemId)}
+              onLogChecklistItem={(itemId) => void handleLogChecklistItem(project.id, itemId)}
+              onAddCustomChecklistItem={(name, cadenceType, cadenceDays) =>
+                void handleAddCustomChecklistItem(project.id, name, cadenceType, cadenceDays)
+              }
+              onRemoveChecklistItem={(itemId) => void handleRemoveChecklistItem(project.id, itemId)}
+              onSetSetupDate={(itemId, date) => void handleSetSetupDate(project.id, itemId, date)}
+              onSetSchedule={(itemId, date) => void handleSetSchedule(project.id, itemId, date)}
               onReassign={(field, profileId) => void handleReassign(project, field, profileId)}
-              onCompleteTask={(taskId) => void handleSetTaskStatus(taskId, 'done')}
+              onCompleteTask={(taskId) => completeTask(taskId)}
+              onOpenFlowReport={() => openFlowReportModal(project.id)}
+              onAddTask={() => openAddTaskModal(project.id)}
             />
           ))}
         </div>
@@ -239,23 +182,35 @@ export function ProjectDashboard() {
         <p className="mt-4 text-xs text-legacy-blue-light">Loading status…</p>
       )}
 
-      <FlowReportsSection
-        reports={flowReports}
-        projects={starredProjects}
-        onSave={handleSaveFlowReport}
-        onSubmit={handleSubmitFlowReport}
-      />
+      <div id="flow-reports">
+        <FlowReportsSection
+          reports={flowReports}
+          projects={starredProjects}
+          onOpenReport={(projectId, month) => openFlowReportModal(projectId, month)}
+        />
+      </div>
 
       <MyTasksSection
         tasks={tasks}
         projects={projects}
-        directory={directory}
         nameFor={nameFor}
         currentProfileId={profile?.id ?? null}
-        onCreate={handleCreateTask}
+        onAddTask={() => openAddTaskModal(null)}
         onSetStatus={handleSetTaskStatus}
+        onCompleteRecurring={handleCompleteRecurringTask}
         onDelete={handleDeleteTask}
       />
+
+      {addTaskModalOpen && (
+        <AddTaskModal
+          presetProjectId={addTaskModalProjectId}
+          projects={projects}
+          directory={directory}
+          currentProfileId={profile?.id ?? null}
+          onClose={() => setAddTaskModalOpen(false)}
+          onCreate={handleCreateTask}
+        />
+      )}
     </div>
   )
 }

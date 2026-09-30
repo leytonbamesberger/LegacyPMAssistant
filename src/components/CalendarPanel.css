@@ -1,0 +1,99 @@
+/* Brand-color overrides for react-big-calendar's default theme, scoped under
+   .legacy-rbc so nothing leaks outside the calendar panel. Colors match
+   tailwind.config.js: legacy-blue-dark #003058, legacy-blue-light #18385f,
+   legacy-red #ee3428. */
+
+.legacy-rbc .rbc-toolbar {
+  margin-bottom: 12px;
+}
+
+.legacy-rbc .rbc-toolbar-label {
+  font-weight: 600;
+  color: #003058;
+  font-size: 1rem;
+}
+
+.legacy-rbc .rbc-toolbar button {
+  color: #18385f;
+  border: 1px solid rgba(24, 56, 95, 0.3);
+  background: white;
+  border-radius: 9999px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+}
+
+.legacy-rbc .rbc-toolbar button:hover {
+  background: rgba(24, 56, 95, 0.08);
+  color: #003058;
+}
+
+.legacy-rbc .rbc-toolbar button.rbc-active,
+.legacy-rbc .rbc-toolbar button.rbc-active:hover {
+  background: #003058;
+  border-color: #003058;
+  color: white;
+}
+
+.legacy-rbc .rbc-month-view,
+.legacy-rbc .rbc-header,
+.legacy-rbc .rbc-day-bg,
+.legacy-rbc .rbc-month-row + .rbc-month-row {
+  border-color: rgba(24, 56, 95, 0.15);
+}
+
+.legacy-rbc .rbc-header {
+  color: #003058;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(24, 56, 95, 0.15);
+}
+
+.legacy-rbc .rbc-off-range-bg {
+  background: rgba(24, 56, 95, 0.03);
+}
+
+.legacy-rbc .rbc-today {
+  background: rgba(238, 52, 40, 0.06);
+}
+
+.legacy-rbc .rbc-date-cell {
+  color: #18385f;
+  font-size: 0.8rem;
+  padding: 4px;
+}
+
+.legacy-rbc .rbc-date-cell.rbc-now {
+  font-weight: 700;
+  color: #ee3428;
+}
+
+.legacy-rbc .rbc-event {
+  border: none;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 0.72rem;
+}
+
+.legacy-rbc .rbc-event:focus {
+  outline: 2px solid #003058;
+}
+
+.legacy-rbc .rbc-show-more {
+  color: #18385f;
+  font-weight: 500;
+  font-size: 0.72rem;
+  background: transparent;
+}
+
+.legacy-rbc .rbc-overlay {
+  border-color: rgba(24, 56, 95, 0.2);
+  border-radius: 8px;
+}
+
+.legacy-rbc .rbc-overlay-header {
+  color: #003058;
+  font-weight: 600;
+  border-color: rgba(24, 56, 95, 0.15);
+}

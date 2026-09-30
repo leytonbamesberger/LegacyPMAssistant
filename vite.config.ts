@@ -72,6 +72,9 @@ interface ApiResult {
   status: number
   json?: unknown
   redirect?: string
+  buffer?: Buffer
+  contentType?: string
+  filename?: string
   headers?: Record<string, string>
 }
 
@@ -151,6 +154,13 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 function writeResult(res: ServerResponse, result: ApiResult) {
   for (const [key, value] of Object.entries(result.headers ?? {})) {
     res.setHeader(key, value)
+  }
+  if (result.buffer) {
+    res.statusCode = result.status
+    if (result.contentType) res.setHeader('content-type', result.contentType)
+    if (result.filename) res.setHeader('content-disposition', `attachment; filename="${result.filename}"`)
+    res.end(result.buffer)
+    return
   }
   if (result.redirect) {
     res.statusCode = result.status || 302

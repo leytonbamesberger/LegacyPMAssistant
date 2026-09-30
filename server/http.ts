@@ -5,10 +5,16 @@
  */
 export interface ApiResult {
   status: number
-  /** JSON body. Ignored when `redirect` is set. */
+  /** JSON body. Ignored when `redirect` or `buffer` is set. */
   json?: unknown
   /** When set, respond with a 3xx `Location` redirect instead of a body. */
   redirect?: string
+  /** Binary body (e.g. a generated PDF). Takes priority over `json`/`redirect` when set. */
+  buffer?: Buffer
+  /** Content-Type for `buffer` — required when `buffer` is set. */
+  contentType?: string
+  /** Filename hint for `buffer` — sets Content-Disposition: attachment. */
+  filename?: string
   /** Extra response headers. */
   headers?: Record<string, string>
 }
@@ -19,6 +25,10 @@ export function json(status: number, body: unknown): ApiResult {
 
 export function redirect(location: string, status = 302): ApiResult {
   return { status, redirect: location }
+}
+
+export function binary(buffer: Buffer, contentType: string, filename: string): ApiResult {
+  return { status: 200, buffer, contentType, filename }
 }
 
 /** Parse `Authorization: Bearer <token>`. */

@@ -56,3 +56,35 @@ export async function apiFetch<T>(
 
   return (await res.json()) as T
 }
+
+/** Like apiFetch, but for a binary response (e.g. a generated PDF) — returns a Blob instead of parsed JSON. */
+export async function apiFetchBlob(
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  path: string,
+  init: RequestInit = {},
+): Promise<Blob | null> {
+  const idToken = await getIdToken(instance, account)
+  if (!idToken) return null
+
+  let res: Response
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers: { ...init.headers, Authorization: `Bearer ${idToken}` },
+    })
+  } catch (err) {
+    console.error(`[api] ${path} request failed:`, err)
+    return null
+  }
+
+  if (!res.ok) {
+    console.error(
+      `[api] ${path} returned ${res.status}:`,
+      await res.text().catch(() => '<no body>'),
+    )
+    return null
+  }
+
+  return await res.blob()
+}

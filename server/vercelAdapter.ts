@@ -41,16 +41,39 @@ interface MinimalResponse {
   status(code: number): MinimalResponse
   json(body: unknown): unknown
   redirect(status: number, url: string): unknown
+  /** Used only for `buffer` ApiResults (e.g. a generated PDF). */
+  end(chunk: Buffer): unknown
 }
 
 type Handler = (req: MinimalRequest) => Promise<ApiResult>
 
+/** Serialises an ApiResult (JSON, redirect, or binary buffer) onto a MinimalResponse. */
+function sendResult(res: MinimalResponse, result: ApiResult): void {
+  for (const [key, value] of Object.entries(result.headers ?? {})) {
+    res.setHeader(key, value)
+  }
+  if (result.buffer) {
+    if (result.contentType) res.setHeader('content-type', result.contentType)
+    if (result.filename) {
+      res.setHeader('content-disposition', `attachment; filename="${result.filename}"`)
+    }
+    res.status(result.status).end(result.buffer)
+    return
+  }
+  if (result.redirect) {
+    res.redirect(result.status || 302, result.redirect)
+    return
+  }
+  res.status(result.status).json(result.json ?? {})
+}
+
 /**
  * Wrap a framework-agnostic handler as a Vercel function: enforce the HTTP
- * method, run the handler, and serialise the `ApiResult` (JSON or redirect).
- * `MinimalRequest`/`MinimalResponse` are structural subsets of Vercel's real
- * request/response objects, so this type-checks against whatever Vercel
- * actually passes at runtime without importing `@vercel/node` (see above).
+ * method, run the handler, and serialise the `ApiResult` (JSON, redirect, or
+ * binary). `MinimalRequest`/`MinimalResponse` are structural subsets of
+ * Vercel's real request/response objects, so this type-checks against
+ * whatever Vercel actually passes at runtime without importing `@vercel/node`
+ * (see above).
  */
 export function vercelRoute(method: 'GET' | 'POST', handler: Handler) {
   return async (req: MinimalRequest, res: MinimalResponse): Promise<void> => {
@@ -61,16 +84,7 @@ export function vercelRoute(method: 'GET' | 'POST', handler: Handler) {
         return
       }
 
-      const result = await handler(req)
-
-      for (const [key, value] of Object.entries(result.headers ?? {})) {
-        res.setHeader(key, value)
-      }
-      if (result.redirect) {
-        res.redirect(result.status || 302, result.redirect)
-        return
-      }
-      res.status(result.status).json(result.json ?? {})
+      sendResult(res, await handler(req))
     } catch (err) {
       // Catches errors from the handler AND from writing the response itself,
       // so a bug here surfaces as clean JSON instead of Vercel's raw crash page.
@@ -101,16 +115,7 @@ export function vercelRouteMulti(handlers: Partial<Record<'GET' | 'POST', Handle
         return
       }
 
-      const result = await handler(req)
-
-      for (const [key, value] of Object.entries(result.headers ?? {})) {
-        res.setHeader(key, value)
-      }
-      if (result.redirect) {
-        res.redirect(result.status || 302, result.redirect)
-        return
-      }
-      res.status(result.status).json(result.json ?? {})
+      sendResult(res, await handler(req))
     } catch (err) {
       console.error(`[api] ${req.url} failed:`, err)
       if (!res.headersSent) {

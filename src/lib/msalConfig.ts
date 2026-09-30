@@ -50,7 +50,14 @@ export const msalConfig: Configuration = {
   },
 }
 
-/** Scopes requested at login. `openid`/`profile` give us the ID token claims. */
+/**
+ * Scopes requested at login. `openid`/`profile` give us the ID token claims.
+ * `Calendars.Read` (delegated, added to the Azure AD app registration) backs
+ * the calendar panel's Outlook events — see src/lib/graphClient.ts for the
+ * separate Graph-audience token acquisition that actually uses it. Admin
+ * consent may not be granted yet; that's an Azure-side state, not something
+ * this app detects or handles specially.
+ */
 export const loginRequest: RedirectRequest = {
-  scopes: ['openid', 'profile', 'email', 'User.Read'],
+  scopes: ['openid', 'profile', 'email', 'User.Read', 'Calendars.Read'],
 }

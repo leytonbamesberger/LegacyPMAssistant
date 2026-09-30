@@ -13,6 +13,9 @@ export interface TaskRecord {
   visibility: 'private' | 'public'
   created_at: string
   completed_at: string | null
+  is_recurring: boolean
+  cadence_days: number | null
+  last_completed_at: string | null
 }
 
 export interface NewTaskFields {
@@ -23,6 +26,8 @@ export interface NewTaskFields {
   dueDate: string | null
   assignedTo: string
   visibility: 'private' | 'public'
+  isRecurring: boolean
+  cadenceDays: number | null
 }
 
 /**
@@ -64,6 +69,8 @@ export async function createTask(
       assigned_to: fields.assignedTo,
       assigned_by: creatorProfileId,
       visibility: fields.visibility,
+      is_recurring: fields.isRecurring,
+      cadence_days: fields.isRecurring ? fields.cadenceDays : null,
     })
     .select()
     .single()
@@ -86,6 +93,25 @@ export async function setTaskStatus(
     .from('tasks')
     .update({ status, completed_at: status === 'done' ? new Date().toISOString() : null })
     .eq('id', taskId)
+    .or(`assigned_to.eq.${callerProfileId},assigned_by.eq.${callerProfileId}`)
+  if (error) throw new Error(error.message)
+}
+
+/**
+ * A recurring task never reaches status = 'done' — completing it just bumps
+ * last_completed_at, and due/overdue is derived from that + cadence_days at
+ * read time (see isTaskDue in server/taskRoutes.ts), not persisted here.
+ */
+export async function completeRecurringTask(
+  admin: SupabaseClient,
+  taskId: string,
+  callerProfileId: string,
+): Promise<void> {
+  const { error } = await admin
+    .from('tasks')
+    .update({ last_completed_at: new Date().toISOString() })
+    .eq('id', taskId)
+    .eq('is_recurring', true)
     .or(`assigned_to.eq.${callerProfileId},assigned_by.eq.${callerProfileId}`)
   if (error) throw new Error(error.message)
 }

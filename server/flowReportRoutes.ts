@@ -1,31 +1,82 @@
-import { ApiResult } from './http.js'
+import { ApiResult, binary } from './http.js'
 import { resolveProfile } from './auth.js'
 import {
-  getCurrentFlowReportsForProjects,
+  getAvailableFlowReportMonths,
+  getDefaultPeriodFlowReportsForProjects,
+  getFlowReportForMonth,
+  getFlowReportsForMonth,
   saveFlowReportDraft,
   submitFlowReport,
   type FlowReportAnswers,
 } from './flowReports.js'
+import { generateFlowReportPdf } from './flowReportPdf.js'
 
-/** GET /api/flow-reports?projectIds=a,b,c — this month's report status for each project. */
+function parseProjectIds(raw: string | undefined): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+}
+
+/**
+ * GET /api/flow-reports — several modes, checked in order:
+ *   ?projectId=x&month=YYYY-MM-DD    — one project's report for one specific month (the
+ *                                       form's month selector, which can reach any month)
+ *   ?projectIds=a,b,c&availableMonths=1 — every month with data for these projects (the
+ *                                          export tool's month selector)
+ *   ?projectIds=a,b,c&month=YYYY-MM-DD  — each project's report for one specific month
+ *                                          (the export tool's project-selection screen)
+ *   ?projectIds=a,b,c                — default-period report for each project (dashboard summary)
+ */
 export async function handleFlowReportsList(
   authorizationHeader: string | undefined,
-  query: { projectIds?: string },
+  query: { projectIds?: string; projectId?: string; month?: string; availableMonths?: string },
 ): Promise<ApiResult> {
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
 
-  const projectIds = (query.projectIds ?? '')
-    .split(',')
-    .map((id) => id.trim())
-    .filter(Boolean)
+  if (query.projectId && query.month) {
+    try {
+      const report = await getFlowReportForMonth(resolved.admin, query.projectId, query.month)
+      return { status: 200, json: { report } }
+    } catch (err) {
+      return {
+        status: 500,
+        json: {
+          error: 'Could not load flow report',
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }
+    }
+  }
 
+  const projectIds = parseProjectIds(query.projectIds)
   if (projectIds.length === 0) {
-    return { status: 400, json: { error: '"projectIds" query param is required' } }
+    return {
+      status: 400,
+      json: { error: 'Either "projectIds", or "projectId" + "month", is required' },
+    }
+  }
+
+  if (query.availableMonths) {
+    try {
+      const months = await getAvailableFlowReportMonths(resolved.admin, projectIds)
+      return { status: 200, json: { months } }
+    } catch (err) {
+      return {
+        status: 500,
+        json: {
+          error: 'Could not load available months',
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }
+    }
   }
 
   try {
-    const reports = await getCurrentFlowReportsForProjects(resolved.admin, projectIds)
+    const reports = query.month
+      ? await getFlowReportsForMonth(resolved.admin, projectIds, query.month)
+      : await getDefaultPeriodFlowReportsForProjects(resolved.admin, projectIds)
     return { status: 200, json: { reports } }
   } catch (err) {
     return {
@@ -41,13 +92,24 @@ export async function handleFlowReportsList(
 function parseFlowReportBody(
   body: unknown,
 ):
-  | { projectId: string; month: string; answers: FlowReportAnswers; dueDate: string | null }
+  | {
+      projectId: string
+      month: string
+      answers: FlowReportAnswers
+      marginFadeNotes: string | null
+      underbilledNotes: string | null
+      attn: string | null
+      company: string | null
+    }
   | { error: ApiResult } {
   const raw = (body ?? {}) as {
     projectId?: unknown
     month?: unknown
     answers?: unknown
-    dueDate?: unknown
+    marginFadeNotes?: unknown
+    underbilledNotes?: unknown
+    attn?: unknown
+    company?: unknown
   }
   if (typeof raw.projectId !== 'string' || typeof raw.month !== 'string') {
     return {
@@ -60,15 +122,35 @@ function parseFlowReportBody(
   if (raw.answers !== undefined && (typeof raw.answers !== 'object' || raw.answers === null)) {
     return { error: { status: 400, json: { error: '"answers" must be an object' } } }
   }
-  if (raw.dueDate !== undefined && raw.dueDate !== null && typeof raw.dueDate !== 'string') {
-    return { error: { status: 400, json: { error: '"dueDate" must be a string or null' } } }
+  if (
+    raw.marginFadeNotes !== undefined &&
+    raw.marginFadeNotes !== null &&
+    typeof raw.marginFadeNotes !== 'string'
+  ) {
+    return { error: { status: 400, json: { error: '"marginFadeNotes" must be a string or null' } } }
+  }
+  if (
+    raw.underbilledNotes !== undefined &&
+    raw.underbilledNotes !== null &&
+    typeof raw.underbilledNotes !== 'string'
+  ) {
+    return { error: { status: 400, json: { error: '"underbilledNotes" must be a string or null' } } }
+  }
+  if (raw.attn !== undefined && raw.attn !== null && typeof raw.attn !== 'string') {
+    return { error: { status: 400, json: { error: '"attn" must be a string or null' } } }
+  }
+  if (raw.company !== undefined && raw.company !== null && typeof raw.company !== 'string') {
+    return { error: { status: 400, json: { error: '"company" must be a string or null' } } }
   }
 
   return {
     projectId: raw.projectId,
     month: raw.month,
     answers: (raw.answers ?? {}) as FlowReportAnswers,
-    dueDate: (raw.dueDate ?? null) as string | null,
+    marginFadeNotes: (raw.marginFadeNotes ?? null) as string | null,
+    underbilledNotes: (raw.underbilledNotes ?? null) as string | null,
+    attn: (raw.attn ?? null) as string | null,
+    company: (raw.company ?? null) as string | null,
   }
 }
 
@@ -89,7 +171,10 @@ async function handleFlowReportsSave(
       parsed.projectId,
       parsed.month,
       parsed.answers,
-      parsed.dueDate,
+      parsed.marginFadeNotes,
+      parsed.underbilledNotes,
+      parsed.attn,
+      parsed.company,
     )
     return { status: 200, json: { report } }
   } catch (err) {
@@ -120,7 +205,10 @@ async function handleFlowReportsSubmit(
       parsed.projectId,
       parsed.month,
       parsed.answers,
-      parsed.dueDate,
+      parsed.marginFadeNotes,
+      parsed.underbilledNotes,
+      parsed.attn,
+      parsed.company,
       resolved.profileId,
     )
     return { status: 200, json: { report } }
@@ -135,8 +223,42 @@ async function handleFlowReportsSubmit(
   }
 }
 
+/** The 'export-pdf' action of POST /api/flow-reports — body { month, projectIds }. */
+async function handleFlowReportsExportPdf(
+  authorizationHeader: string | undefined,
+  body: unknown,
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+
+  const raw = (body ?? {}) as { month?: unknown; projectIds?: unknown }
+  if (typeof raw.month !== 'string') {
+    return { status: 400, json: { error: '"month" (string) is required' } }
+  }
+  if (!Array.isArray(raw.projectIds) || raw.projectIds.some((id) => typeof id !== 'string')) {
+    return { status: 400, json: { error: '"projectIds" (string array) is required' } }
+  }
+  const projectIds = raw.projectIds as string[]
+  if (projectIds.length === 0) {
+    return { status: 400, json: { error: '"projectIds" must not be empty' } }
+  }
+
+  try {
+    const pdf = await generateFlowReportPdf(resolved.admin, projectIds, raw.month, resolved.profileId)
+    return binary(pdf, 'application/pdf', `FLOW Report ${raw.month}.pdf`)
+  } catch (err) {
+    return {
+      status: 500,
+      json: {
+        error: 'Could not generate PDF',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+    }
+  }
+}
+
 /**
- * POST /api/flow-reports — action dispatch: { action: 'save' | 'submit', ... }.
+ * POST /api/flow-reports — action dispatch: { action: 'save' | 'submit' | 'export-pdf', ... }.
  * See the Hobby-plan function-count note in vercelAdapter.ts.
  */
 export async function handleFlowReportsPost(
@@ -149,7 +271,9 @@ export async function handleFlowReportsPost(
       return handleFlowReportsSave(authorizationHeader, body)
     case 'submit':
       return handleFlowReportsSubmit(authorizationHeader, body)
+    case 'export-pdf':
+      return handleFlowReportsExportPdf(authorizationHeader, body)
     default:
-      return { status: 400, json: { error: '"action" must be "save" or "submit"' } }
+      return { status: 400, json: { error: '"action" must be "save", "submit", or "export-pdf"' } }
   }
 }

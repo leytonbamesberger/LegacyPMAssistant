@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { ExportFlowReports } from './pages/ExportFlowReports'
 import { Home } from './pages/Home'
 import { Login } from './pages/Login'
 import { ProjectDashboard } from './pages/ProjectDashboard'
@@ -17,6 +18,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <ProjectDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/organization/export"
+          element={
+            <ProtectedRoute>
+              <ExportFlowReports />
             </ProtectedRoute>
           }
         />
