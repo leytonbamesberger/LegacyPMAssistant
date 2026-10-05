@@ -1,11 +1,17 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Project } from '../lib/projects'
 import type { ProfileDirectoryEntry } from '../lib/profiles'
-import type { NewTaskInput, Task } from '../lib/tasks'
+import type { CadenceUnit, NewTaskInput } from '../lib/tasks'
+import { projectSearchOptions } from '../lib/projectOptions'
 import { Modal } from './Modal'
+import { SearchSelect } from './SearchSelect'
 
-/** Same modal/form used by My Tasks' "+ Add Task" and each project card's "+" button. */
+/**
+ * Manual task entry — generated checklist and flow tasks don't come through
+ * here. There's no "type" to pick: the server sets it from the assignee and
+ * project (see inferTaskType in server/tasks.ts).
+ */
 export function AddTaskModal({
   presetProjectId,
   projects,
@@ -22,29 +28,37 @@ export function AddTaskModal({
   onCreate: (fields: NewTaskInput) => Promise<void>
 }) {
   const [title, setTitle] = useState('')
-  const [type, setType] = useState<Task['type']>('personal')
-  const [projectId, setProjectId] = useState(presetProjectId ?? '')
+  const [projectId, setProjectId] = useState<string | null>(presetProjectId)
+  const [notes, setNotes] = useState('')
   const [assignedTo, setAssignedTo] = useState(currentProfileId ?? '')
   const [dueDate, setDueDate] = useState('')
   const [visibility, setVisibility] = useState<'private' | 'public'>('private')
   const [isRecurring, setIsRecurring] = useState(false)
-  const [cadenceDays, setCadenceDays] = useState('7')
+  const [cadenceValue, setCadenceValue] = useState('1')
+  const [cadenceUnit, setCadenceUnit] = useState<CadenceUnit>('week')
   const [saving, setSaving] = useState(false)
+
+  const projectOptions = useMemo(() => projectSearchOptions(projects), [projects])
+  // Visibility only matters for a task that will end up personal: nobody else assigned, no project.
+  const isPersonal = !projectId && (!assignedTo || assignedTo === currentProfileId)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!title.trim() || !assignedTo || saving) return
+    // The next cycle's due date is computed from this one, so recurring needs a date.
+    if (isRecurring && !dueDate) return
     setSaving(true)
     await onCreate({
-      type,
-      projectId: projectId || null,
+      projectId,
       title: title.trim(),
       description: null,
-      dueDate: isRecurring ? null : dueDate || null,
-      assignedTo,
+      notes: notes.trim() ? notes : null,
+      dueDate: dueDate || null,
+      assigneeIds: [assignedTo],
       visibility,
       isRecurring,
-      cadenceDays: isRecurring ? Number(cadenceDays) || 7 : null,
+      cadenceValue: isRecurring ? Number(cadenceValue) || 1 : null,
+      cadenceUnit: isRecurring ? cadenceUnit : null,
     })
     setSaving(false)
     onClose()
@@ -73,31 +87,19 @@ export function AddTaskModal({
           placeholder="Task title"
           className="w-full rounded border border-legacy-blue-light/30 px-2 py-1.5 text-sm text-legacy-blue-dark focus:border-legacy-blue-dark focus:outline-none"
         />
+        <SearchSelect
+          label="Project"
+          options={projectOptions}
+          value={projectId}
+          onChange={setProjectId}
+          allLabel="No project"
+          placeholder="Search projects…"
+        />
         <div className="flex flex-wrap gap-2">
-          <select
-            value={type}
-            onChange={(e) => setType(e.target.value as Task['type'])}
-            className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-          >
-            <option value="personal">Personal</option>
-            <option value="person">Person</option>
-            <option value="project">Project</option>
-          </select>
-          <select
-            value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
-            className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-          >
-            <option value="">No Project</option>
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
           <select
             value={assignedTo}
             onChange={(e) => setAssignedTo(e.target.value)}
+            aria-label="Assigned to"
             className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
           >
             {directory.map((p) => (
@@ -106,18 +108,19 @@ export function AddTaskModal({
               </option>
             ))}
           </select>
-          {!isRecurring && (
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
-            />
-          )}
-          {type === 'personal' && (
+          <input
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+            aria-label={isRecurring ? 'First due date' : 'Due date'}
+            title={isRecurring ? 'First due date' : 'Due date'}
+            className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
+          />
+          {isPersonal && (
             <select
               value={visibility}
               onChange={(e) => setVisibility(e.target.value as 'private' | 'public')}
+              aria-label="Visibility"
               className="rounded border border-legacy-blue-light/30 px-2 py-1 text-xs text-legacy-blue-dark"
             >
               <option value="private">Private</option>
@@ -125,6 +128,14 @@ export function AddTaskModal({
             </select>
           )}
         </div>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Notes (optional)"
+          aria-label="Notes"
+          rows={3}
+          className="w-full resize-y rounded border border-legacy-blue-light/30 px-2 py-1.5 text-sm text-legacy-blue-dark focus:border-legacy-blue-dark focus:outline-none"
+        />
         <label className="flex items-center gap-2 text-xs text-legacy-blue-dark">
           <input
             type="checkbox"
@@ -139,17 +150,26 @@ export function AddTaskModal({
               <input
                 type="number"
                 min={1}
-                value={cadenceDays}
-                onChange={(e) => setCadenceDays(e.target.value)}
+                value={cadenceValue}
+                onChange={(e) => setCadenceValue(e.target.value)}
                 className="w-14 rounded border border-legacy-blue-light/30 px-1.5 py-0.5 text-xs text-legacy-blue-dark"
               />
-              days
+              <select
+                value={cadenceUnit}
+                onChange={(e) => setCadenceUnit(e.target.value as CadenceUnit)}
+                className="rounded border border-legacy-blue-light/30 px-1.5 py-0.5 text-xs text-legacy-blue-dark"
+              >
+                <option value="day">days</option>
+                <option value="week">weeks</option>
+                <option value="month">months</option>
+              </select>
+              <span className="text-legacy-blue-light">(needs a first due date)</span>
             </>
           )}
         </label>
         <button
           type="submit"
-          disabled={saving || !title.trim()}
+          disabled={saving || !title.trim() || (isRecurring && !dueDate)}
           className="rounded-full bg-legacy-blue-dark px-3 py-1.5 text-xs font-medium text-white disabled:opacity-60"
         >
           Add Task

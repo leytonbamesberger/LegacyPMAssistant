@@ -1,6 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { getValidAccessToken } from './procore.js'
 import { listCompanies, listProjectsForCompany, RawProcoreProject } from './procoreApi.js'
+import { syncGeneratedTaskAssignees } from './generatedTasks.js'
 
 export interface ProjectRecord {
   id: string
@@ -17,6 +18,8 @@ export interface ProjectRecord {
   pm_id: string | null
   apm_id: string | null
   checklist_enabled: boolean
+  /** Set once by the initiation wizard; Setup/Recurring tasks and Overview inclusion require it. */
+  initiated: boolean
 }
 
 export interface ProjectEditableFields {
@@ -103,7 +106,7 @@ export async function syncProjects(
   // every future sync instead of resetting them to their defaults.
   const rows: Omit<
     ProjectRecord,
-    'id' | 'created_at' | 'gc' | 'status' | 'pm_id' | 'apm_id' | 'checklist_enabled'
+    'id' | 'created_at' | 'gc' | 'status' | 'pm_id' | 'apm_id' | 'checklist_enabled' | 'initiated'
   >[] = []
   let anyCompanySucceeded = false
 
@@ -257,4 +260,13 @@ export async function updateProject(
 ): Promise<void> {
   const { error } = await admin.from('projects').update(fields).eq('id', projectId)
   if (error) throw new Error(error.message)
+
+  // Open checklist/flow tasks follow the project's PM/APM.
+  if ('pm_id' in fields || 'apm_id' in fields) {
+    try {
+      await syncGeneratedTaskAssignees(admin, projectId)
+    } catch (err) {
+      console.warn('[projects] could not re-sync task assignees after PM/APM change:', err)
+    }
+  }
 }

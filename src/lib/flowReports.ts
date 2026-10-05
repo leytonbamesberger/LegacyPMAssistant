@@ -1,11 +1,12 @@
 import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
 import { apiFetch, apiFetchBlob } from './apiClient'
 import { FLOW_REPORT_QUESTIONS, type FlowReportAnswers } from '../../shared/flowReportQuestions'
+import type { FlowBudgetChecklist } from '../../shared/flowBudget'
 
 export { FLOW_REPORT_QUESTIONS }
 export type { FlowReportAnswers }
 
-export interface FlowReport {
+export interface FlowReport extends FlowBudgetChecklist {
   id: string
   project_id: string
   month: string
@@ -137,6 +138,7 @@ export async function saveFlowReportDraft(
   underbilledNotes: string | null,
   attn: string | null,
   company: string | null,
+  budget: FlowBudgetChecklist,
 ): Promise<FlowReport | null> {
   const body = await postFlowReportAction(instance, account, {
     action: 'save',
@@ -147,6 +149,7 @@ export async function saveFlowReportDraft(
     underbilledNotes,
     attn,
     company,
+    budget,
   })
   return body?.report ?? null
 }
@@ -161,6 +164,7 @@ export async function submitFlowReport(
   underbilledNotes: string | null,
   attn: string | null,
   company: string | null,
+  budget: FlowBudgetChecklist,
 ): Promise<FlowReport | null> {
   const body = await postFlowReportAction(instance, account, {
     action: 'submit',
@@ -171,6 +175,7 @@ export async function submitFlowReport(
     underbilledNotes,
     attn,
     company,
+    budget,
   })
   return body?.report ?? null
 }

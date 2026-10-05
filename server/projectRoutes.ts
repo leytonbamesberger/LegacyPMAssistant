@@ -7,6 +7,10 @@ import {
   syncProjects,
   updateProject,
 } from './projects.js'
+import { getInitiationCatalog } from './checklist.js'
+import { addOverviewProject, getOverview, removeOverviewProject } from './overview.js'
+import { initiateProject, parseInitiationPayload } from './initiation.js'
+import { TaskRuleError } from './tasks.js'
 
 async function loadProjectsResult(
   admin: Parameters<typeof getProjectsForProfile>[0],
@@ -31,13 +35,108 @@ async function loadProjectsResult(
  * Returns the cached project list immediately — never triggers a Procore
  * call itself, so the UI can render cached data with zero latency. The
  * client separately (and non-blockingly) POSTs { action: 'sync' }.
+ *
+ * GET /api/projects?initiationCatalogFor=<projectId> instead returns that
+ * project's Setup/Recurring checklist catalog for the initiation wizard.
+ *
+ * GET /api/projects?overview=1 instead returns the caller's Overview grid
+ * (see server/overview.ts).
  */
 export async function handleProjectsList(
   authorizationHeader: string | undefined,
+  query: { initiationCatalogFor?: string; overview?: string } = {},
 ): Promise<ApiResult> {
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
+
+  if (query.overview) {
+    try {
+      return { status: 200, json: await getOverview(resolved.admin, resolved.profileId) }
+    } catch (err) {
+      return {
+        status: 500,
+        json: {
+          error: 'Could not load the overview',
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }
+    }
+  }
+
+  if (query.initiationCatalogFor) {
+    try {
+      const catalog = await getInitiationCatalog(resolved.admin, query.initiationCatalogFor)
+      return { status: 200, json: catalog }
+    } catch (err) {
+      return {
+        status: 500,
+        json: {
+          error: 'Could not load the initiation checklist',
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }
+    }
+  }
+
   return loadProjectsResult(resolved.admin, resolved.profileId)
+}
+
+/** The 'initiate' action of POST /api/projects — body is the wizard's InitiationPayload (see server/initiation.ts). */
+async function handleProjectsInitiate(
+  authorizationHeader: string | undefined,
+  body: unknown,
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+
+  try {
+    await initiateProject(resolved.admin, resolved.profileId, parseInitiationPayload(body))
+    return { status: 200, json: { ok: true } }
+  } catch (err) {
+    if (err instanceof TaskRuleError) {
+      return { status: err.status, json: { error: err.message } }
+    }
+    console.error('[projects] initiate failed:', err)
+    return {
+      status: 500,
+      json: {
+        error: 'Could not initiate project',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+    }
+  }
+}
+
+/**
+ * The 'overview-add' / 'overview-remove' actions of POST /api/projects — body { projectId }.
+ * Edits only the Overview selection; the caller's Added list is untouched.
+ */
+async function handleProjectsOverviewEdit(
+  authorizationHeader: string | undefined,
+  body: unknown,
+  mode: 'add' | 'remove',
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+
+  const { projectId } = (body ?? {}) as { projectId?: unknown }
+  if (typeof projectId !== 'string') {
+    return { status: 400, json: { error: '"projectId" (string) is required' } }
+  }
+
+  try {
+    const edit = mode === 'add' ? addOverviewProject : removeOverviewProject
+    await edit(resolved.admin, resolved.profileId, projectId)
+    return { status: 200, json: { ok: true } }
+  } catch (err) {
+    return {
+      status: 500,
+      json: {
+        error: 'Could not update the overview',
+        detail: err instanceof Error ? err.message : String(err),
+      },
+    }
+  }
 }
 
 /**
@@ -192,7 +291,7 @@ export async function handleProjectsUpdate(
 }
 
 /**
- * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update', ... }.
+ * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update' | 'initiate' | 'overview-add' | 'overview-remove', ... }.
  * One file/handler per verb regardless of action count, to stay well under
  * Vercel's Hobby-plan 12-Serverless-Function cap (see vercelAdapter.ts).
  */
@@ -208,10 +307,19 @@ export async function handleProjectsPost(
       return handleProjectsStar(authorizationHeader, body)
     case 'update':
       return handleProjectsUpdate(authorizationHeader, body)
+    case 'initiate':
+      return handleProjectsInitiate(authorizationHeader, body)
+    case 'overview-add':
+      return handleProjectsOverviewEdit(authorizationHeader, body, 'add')
+    case 'overview-remove':
+      return handleProjectsOverviewEdit(authorizationHeader, body, 'remove')
     default:
       return {
         status: 400,
-        json: { error: '"action" must be "sync", "star", or "update"' },
+        json: {
+          error:
+            '"action" must be "sync", "star", "update", "initiate", "overview-add", or "overview-remove"',
+        },
       }
   }
 }

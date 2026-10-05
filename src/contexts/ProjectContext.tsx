@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import type { ReactNode } from 'react'
@@ -17,7 +18,10 @@ import {
 import { useUnsavedWork } from './UnsavedWorkContext'
 
 const SELECTED_PROJECT_KEY = 'legacy-pm:selectedProjectId'
-const PROJECTS_CACHE_PREFIX = 'legacy-pm:projects:'
+// v2: projects gained `initiated`. Bumping the key means a cache written before that
+// field existed is ignored, instead of showing every project as "needs initiating"
+// for the moment before the first fetch lands.
+const PROJECTS_CACHE_PREFIX = 'legacy-pm:projects:v2:'
 
 interface PendingSwitch {
   /** The project being switched to, or null to deselect. Wrapped so "null" is
@@ -29,13 +33,27 @@ interface ProjectContextValue {
   projects: Project[]
   selectedProject: Project | null
   loading: boolean
+  /** The first project-list fetch has finished (successfully or not) — cached rows alone don't count. */
+  loaded: boolean
+  /** That first fetch failed. */
+  loadError: boolean
+  /** Re-runs the initial project-list fetch (no Procore sync). */
+  retryLoad: () => Promise<void>
   syncing: boolean
   syncError: string | null
   /** Attempts to select a project, guarding against unsaved work first. */
   selectProject: (project: Project | null) => void
   /** Manually re-trigger a Procore sync ("Refresh Projects"). */
   refreshProjects: () => Promise<void>
+  /** Re-reads the project list from our own database (no Procore call) — e.g. after initiation changes a project. */
+  reloadProjects: () => Promise<void>
   toggleStar: (project: Project) => Promise<void>
+  /**
+   * Bumps once the server has recorded an Add/remove. Adding a project creates
+   * its flow task server-side, so task lists refetch on this (not on the
+   * optimistic flip, which would race the request).
+   */
+  addedVersion: number
   /** Non-null while the unsaved-work confirmation modal should be showing. */
   pendingSwitch: PendingSwitch | null
   confirmPendingSwitch: () => void
@@ -99,9 +117,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>(() => readStoredProjects(account?.homeAccountId))
   const [selectedId, setSelectedId] = useState<string | null>(readStoredProjectId)
   const [loading, setLoading] = useState(() => readStoredProjects(account?.homeAccountId).length === 0)
+  const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncError, setSyncError] = useState<string | null>(null)
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null)
+  const [addedVersion, setAddedVersion] = useState(0)
 
   // Keep the cache in sync with whatever's shown, regardless of which code path
   // changed it (initial fetch, Procore sync, star toggle + its revert, ...) —
@@ -110,6 +131,24 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     writeStoredProjects(account?.homeAccountId, projects)
   }, [account?.homeAccountId, projects])
 
+  // The first fetch of the project list from our own database (never a Procore call).
+  const loadId = useRef(0)
+  const loadProjectList = useCallback(async () => {
+    if (!account) return
+    const id = ++loadId.current
+    setLoadError(false)
+    // Only show the loading state when there's nothing cached to show yet
+    // (this device's first-ever load for this user) — otherwise the cached
+    // cards stay on screen while this refetch happens quietly behind them.
+    if (readStoredProjects(account.homeAccountId).length === 0) setLoading(true)
+    const fresh = await fetchProjects(instance, account)
+    if (id !== loadId.current) return
+    if (fresh) setProjects(fresh)
+    setLoadError(fresh === null)
+    setLoading(false)
+    setLoaded(true)
+  }, [instance, account])
+
   // On mount (once authenticated): show cached projects immediately, then
   // sync with Procore in the background without blocking anything above.
   useEffect(() => {
@@ -117,13 +156,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     let cancelled = false
 
     void (async () => {
-      // Only show the loading state when there's nothing cached to show yet
-      // (this device's first-ever load for this user) — otherwise the cached
-      // cards stay on screen while this refetch happens quietly behind them.
-      if (readStoredProjects(account.homeAccountId).length === 0) setLoading(true)
-      const cached = await fetchProjects(instance, account)
-      if (!cancelled && cached) setProjects(cached)
-      setLoading(false)
+      await loadProjectList()
+      if (cancelled) return
 
       setSyncing(true)
       const result = await apiSyncProjects(instance, account)
@@ -140,7 +174,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [instance, account])
+  }, [instance, account, loadProjectList])
 
   const selectedProject = useMemo(
     () => projects.find((p) => p.id === selectedId) ?? null,
@@ -184,6 +218,12 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setSyncing(false)
   }, [instance, account])
 
+  const reloadProjects = useCallback(async () => {
+    if (!account) return
+    const fresh = await fetchProjects(instance, account)
+    if (fresh) setProjects(fresh)
+  }, [instance, account])
+
   const toggleStar = useCallback(
     async (project: Project) => {
       if (!account) return
@@ -197,6 +237,8 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
         setProjects((prev) =>
           prev.map((p) => (p.id === project.id ? { ...p, isStarred: !nextStarred } : p)),
         )
+      } else {
+        setAddedVersion((v) => v + 1)
       }
     },
     [instance, account],
@@ -207,11 +249,16 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       projects,
       selectedProject,
       loading,
+      loaded,
+      loadError,
+      retryLoad: loadProjectList,
       syncing,
       syncError,
       selectProject,
       refreshProjects,
+      reloadProjects,
       toggleStar,
+      addedVersion,
       pendingSwitch,
       confirmPendingSwitch,
       cancelPendingSwitch,
@@ -220,11 +267,16 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       projects,
       selectedProject,
       loading,
+      loaded,
+      loadError,
+      loadProjectList,
       syncing,
       syncError,
       selectProject,
       refreshProjects,
+      reloadProjects,
       toggleStar,
+      addedVersion,
       pendingSwitch,
       confirmPendingSwitch,
       cancelPendingSwitch,

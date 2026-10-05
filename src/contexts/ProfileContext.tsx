@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useMsal } from '@azure/msal-react'
 import {
@@ -15,6 +15,10 @@ interface ProfileContextValue {
   /** Every profile in the company (id/display_name/title), for names + assignment pickers. */
   directory: ProfileDirectoryEntry[]
   loading: boolean
+  /** The profile or directory request failed (as opposed to still loading). */
+  error: boolean
+  /** Re-runs the initial profile + directory load. */
+  reload: () => Promise<void>
   setTitle: (title: 'pm' | 'apm') => Promise<void>
   /** display_name for any profile id, falling back to something non-blank. */
   nameFor: (profileId: string | null) => string
@@ -29,27 +33,30 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null)
   const [directory, setDirectory] = useState<ProfileDirectoryEntry[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+
+  // Only the newest load may write state (a Retry can overlap a slow first attempt).
+  const loadId = useRef(0)
+  const reload = useCallback(async () => {
+    if (!account) return
+    const id = ++loadId.current
+    setLoading(true)
+    setError(false)
+    const [ownProfile, dir] = await Promise.all([
+      ensureProfile(instance, account),
+      fetchProfileDirectory(instance, account),
+    ])
+    if (id !== loadId.current) return
+    setProfile(ownProfile)
+    setDirectory(dir ?? [])
+    // Either request failing means the app can't render names/assignments correctly.
+    setError(ownProfile === null || dir === null)
+    setLoading(false)
+  }, [instance, account])
 
   useEffect(() => {
-    if (!account) return
-    let cancelled = false
-
-    void (async () => {
-      setLoading(true)
-      const [ownProfile, dir] = await Promise.all([
-        ensureProfile(instance, account),
-        fetchProfileDirectory(instance, account),
-      ])
-      if (cancelled) return
-      setProfile(ownProfile)
-      setDirectory(dir ?? [])
-      setLoading(false)
-    })()
-
-    return () => {
-      cancelled = true
-    }
-  }, [instance, account])
+    void reload()
+  }, [reload])
 
   const setTitle = useCallback(
     async (title: 'pm' | 'apm') => {
@@ -74,8 +81,8 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<ProfileContextValue>(
-    () => ({ profile, directory, loading, setTitle, nameFor }),
-    [profile, directory, loading, setTitle, nameFor],
+    () => ({ profile, directory, loading, error, reload, setTitle, nameFor }),
+    [profile, directory, loading, error, reload, setTitle, nameFor],
   )
 
   return <ProfileContext.Provider value={value}>{children}</ProfileContext.Provider>

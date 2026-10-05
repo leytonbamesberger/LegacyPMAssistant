@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import Fuse from 'fuse.js'
 import { useProject } from '../contexts/ProjectContext'
 import type { Project } from '../lib/projects'
-import { ChevronIcon, RefreshIcon, SearchIcon, StarIcon } from './icons'
+import { AddProjectIcon, ChevronIcon, RefreshIcon, SearchIcon } from './icons'
 
 const COLLAPSED_KEY = 'legacy-pm:sidebarCollapsed'
 const MAX_SEARCH_RESULTS = 25
@@ -22,7 +22,7 @@ function readCollapsed(): boolean {
 /**
  * Left-side, collapsible project selector. Collapsed: a narrow rail showing
  * the active project's job number. Expanded: a search box over either the
- * starred list (search empty) or fuzzy-matched results (search has text).
+ * Added list (search empty) or fuzzy-matched results (search has text).
  */
 export function Sidebar() {
   const {
@@ -62,7 +62,7 @@ export function Sidebar() {
     return fuse.search(query).slice(0, MAX_SEARCH_RESULTS).map((r) => r.item)
   }, [fuse, query])
 
-  const starredProjects = useMemo(
+  const addedProjects = useMemo(
     () => projects.filter((p) => p.isStarred),
     [projects],
   )
@@ -152,16 +152,16 @@ export function Sidebar() {
               No projects match “{query}”.
             </p>
           )
-        ) : starredProjects.length > 0 ? (
+        ) : addedProjects.length > 0 ? (
           <ProjectList
-            projects={starredProjects}
+            projects={addedProjects}
             selectedId={selectedProject?.id ?? null}
             onSelect={handleSelect}
             onToggleStar={toggleStar}
           />
         ) : (
           <p className="px-2 py-4 text-center text-xs text-legacy-blue-light">
-            No starred projects yet. Search above and star one to keep it handy.
+            No projects added yet. Search above and Add one to keep it handy.
           </p>
         )}
       </div>
@@ -236,12 +236,12 @@ function ProjectRow({
           e.stopPropagation()
           onToggleStar()
         }}
-        title={project.isStarred ? 'Unstar' : 'Star'}
+        title={project.isStarred ? 'Added — click to remove' : 'Add project'}
         className={`shrink-0 px-2 py-1.5 ${
           active ? 'text-white' : 'text-legacy-blue-light hover:text-legacy-red'
         }`}
       >
-        <StarIcon filled={project.isStarred} className="h-4 w-4" />
+        <AddProjectIcon added={project.isStarred} className="h-4 w-4" />
       </button>
     </li>
   )

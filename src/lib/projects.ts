@@ -16,6 +16,8 @@ export interface Project {
   pm_id: string | null
   apm_id: string | null
   checklist_enabled: boolean
+  /** Set once by the initiation wizard; gates Setup/Recurring tasks and Overview inclusion. */
+  initiated: boolean
 }
 
 export interface ProjectEditableFields {

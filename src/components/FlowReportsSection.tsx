@@ -13,7 +13,7 @@ const STATUS_CLASS: Record<FlowReport['status'], string> = {
   completed: 'bg-legacy-blue-dark text-white',
 }
 
-/** Flat cross-project list; clicking a row opens the shared FlowReportModal (see ProjectDashboard). */
+/** Flat cross-project list; clicking a row opens the shared FlowReportModal (see FlowPage). */
 export function FlowReportsSection({
   reports,
   projects,
@@ -23,16 +23,9 @@ export function FlowReportsSection({
   projects: Project[]
   onOpenReport: (projectId: string, month: string) => void
 }) {
-  if (reports.length === 0) return null
-
   return (
-    <div className="mt-10">
-      <h2 className="text-lg font-semibold text-legacy-blue-dark">Flow Reports</h2>
-      <p className="mt-1 text-sm text-legacy-blue-light">
-        This month's report status across your starred projects.
-      </p>
-
-      <div className="mt-4 overflow-hidden rounded-lg border border-legacy-blue-light/25">
+    <div>
+      <div className="overflow-hidden rounded-lg border border-legacy-blue-light/25">
         <table className="w-full text-sm">
           <thead className="bg-legacy-blue-light/5 text-left text-xs uppercase tracking-wide text-legacy-blue-light">
             <tr>
@@ -86,5 +79,5 @@ function formatMonth(iso: string): string {
 }
 
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  return new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }

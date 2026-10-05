@@ -9,14 +9,20 @@ import {
   type FlowReport,
   type FlowReportAnswers,
 } from '../lib/flowReports'
+import type { FlowBudgetChecklist } from '../../shared/flowBudget'
 import { FlowReportModal } from '../components/FlowReportModal'
 import { useProject } from './ProjectContext'
 
 interface FlowReportContextValue {
-  /** Each starred project's report for the current default period. */
+  /** Each Added project's report for the current default period. */
   flowReports: FlowReport[]
   loading: boolean
   statusByProject: Record<string, FlowReport['status']>
+  /**
+   * Bumps after every report save/submit. A report's status is mirrored onto its
+   * flow task server-side, so anything showing tasks refetches when this changes.
+   */
+  reportVersion: number
   /** Opens the shared modal for a project — `month` defaults to its existing report's month, or the current default period. */
   openFlowReportModal: (projectId: string, month?: string) => void
 }
@@ -24,10 +30,10 @@ interface FlowReportContextValue {
 const FlowReportContext = createContext<FlowReportContextValue | null>(null)
 
 /**
- * Single source of truth for starred-project flow report status, and the one
- * FlowReportModal instance for the whole app shell — so the project cards,
- * the Flow Reports section, and the checklist panel's Flow Status column all
- * open the same modal and see the same status without a parallel data path.
+ * Single source of truth for Added-project flow report status, and the one
+ * FlowReportModal instance for the whole app shell — so every entry point
+ * (the Tasks page's flow tasks, the calendar) opens the same modal and sees
+ * the same status without a parallel data path.
  */
 export function FlowReportProvider({ children }: { children: ReactNode }) {
   const { instance, accounts } = useMsal()
@@ -40,6 +46,7 @@ export function FlowReportProvider({ children }: { children: ReactNode }) {
   const [flowReports, setFlowReports] = useState<FlowReport[]>([])
   const [loading, setLoading] = useState(true)
   const [modal, setModal] = useState<{ projectId: string; month: string } | null>(null)
+  const [reportVersion, setReportVersion] = useState(0)
 
   const refresh = useCallback(async () => {
     if (!account || starredIds.length === 0) {
@@ -76,6 +83,7 @@ export function FlowReportProvider({ children }: { children: ReactNode }) {
       underbilledNotes: string | null,
       attn: string | null,
       company: string | null,
+      budget: FlowBudgetChecklist,
     ) => {
       if (!account) return null
       const report = await saveFlowReportDraft(
@@ -88,8 +96,12 @@ export function FlowReportProvider({ children }: { children: ReactNode }) {
         underbilledNotes,
         attn,
         company,
+        budget,
       )
-      if (report) patchIfCurrentPeriod(report)
+      if (report) {
+        patchIfCurrentPeriod(report)
+        setReportVersion((v) => v + 1)
+      }
       return report
     },
     [instance, account, patchIfCurrentPeriod],
@@ -104,6 +116,7 @@ export function FlowReportProvider({ children }: { children: ReactNode }) {
       underbilledNotes: string | null,
       attn: string | null,
       company: string | null,
+      budget: FlowBudgetChecklist,
     ) => {
       if (!account) return null
       const report = await submitFlowReport(
@@ -116,8 +129,12 @@ export function FlowReportProvider({ children }: { children: ReactNode }) {
         underbilledNotes,
         attn,
         company,
+        budget,
       )
-      if (report) patchIfCurrentPeriod(report)
+      if (report) {
+        patchIfCurrentPeriod(report)
+        setReportVersion((v) => v + 1)
+      }
       return report
     },
     [instance, account, patchIfCurrentPeriod],
@@ -141,8 +158,8 @@ export function FlowReportProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<FlowReportContextValue>(
-    () => ({ flowReports, loading, statusByProject, openFlowReportModal }),
-    [flowReports, loading, statusByProject, openFlowReportModal],
+    () => ({ flowReports, loading, statusByProject, reportVersion, openFlowReportModal }),
+    [flowReports, loading, statusByProject, reportVersion, openFlowReportModal],
   )
 
   const project = modal ? projects.find((p) => p.id === modal.projectId) : undefined

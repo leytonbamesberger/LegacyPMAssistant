@@ -10,6 +10,7 @@ import {
   type FlowReportAnswers,
 } from './flowReports.js'
 import { generateFlowReportPdf } from './flowReportPdf.js'
+import { FLOW_BUDGET_ITEMS, type FlowBudgetChecklist } from '../shared/flowBudget.js'
 
 function parseProjectIds(raw: string | undefined): string[] {
   return (raw ?? '')
@@ -100,6 +101,7 @@ function parseFlowReportBody(
       underbilledNotes: string | null
       attn: string | null
       company: string | null
+      budget: Partial<FlowBudgetChecklist>
     }
   | { error: ApiResult } {
   const raw = (body ?? {}) as {
@@ -110,6 +112,7 @@ function parseFlowReportBody(
     underbilledNotes?: unknown
     attn?: unknown
     company?: unknown
+    budget?: unknown
   }
   if (typeof raw.projectId !== 'string' || typeof raw.month !== 'string') {
     return {
@@ -143,6 +146,23 @@ function parseFlowReportBody(
     return { error: { status: 400, json: { error: '"company" must be a string or null' } } }
   }
 
+  // Optional: only the boxes present are written, so an older client that doesn't send `budget`
+  // can't wipe a month's ticks.
+  const budget: Partial<FlowBudgetChecklist> = {}
+  if (raw.budget !== undefined) {
+    if (typeof raw.budget !== 'object' || raw.budget === null) {
+      return { error: { status: 400, json: { error: '"budget" must be an object of booleans' } } }
+    }
+    for (const { key } of FLOW_BUDGET_ITEMS) {
+      const value = (raw.budget as Record<string, unknown>)[key]
+      if (value === undefined) continue
+      if (typeof value !== 'boolean') {
+        return { error: { status: 400, json: { error: `"budget.${key}" must be a boolean` } } }
+      }
+      budget[key] = value
+    }
+  }
+
   return {
     projectId: raw.projectId,
     month: raw.month,
@@ -151,6 +171,7 @@ function parseFlowReportBody(
     underbilledNotes: (raw.underbilledNotes ?? null) as string | null,
     attn: (raw.attn ?? null) as string | null,
     company: (raw.company ?? null) as string | null,
+    budget,
   }
 }
 
@@ -175,6 +196,7 @@ async function handleFlowReportsSave(
       parsed.underbilledNotes,
       parsed.attn,
       parsed.company,
+      parsed.budget,
     )
     return { status: 200, json: { report } }
   } catch (err) {
@@ -209,6 +231,7 @@ async function handleFlowReportsSubmit(
       parsed.underbilledNotes,
       parsed.attn,
       parsed.company,
+      parsed.budget,
       resolved.profileId,
     )
     return { status: 200, json: { report } }

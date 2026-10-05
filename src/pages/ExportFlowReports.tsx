@@ -88,8 +88,8 @@ export function ExportFlowReports() {
 
   return (
     <div className="mx-auto w-full max-w-3xl px-6 py-10">
-      <Link to="/organization" className="text-xs text-legacy-blue-light hover:underline">
-        ← Back to Organization
+      <Link to="/organization/flow" className="text-xs text-legacy-blue-light hover:underline">
+        ← Back to FLOW
       </Link>
       <h1 className="mt-1 text-xl font-semibold text-legacy-blue-dark">Export Flow Reports</h1>
       <p className="mt-1 text-sm text-legacy-blue-light">
@@ -98,7 +98,7 @@ export function ExportFlowReports() {
 
       {starredProjects.length === 0 ? (
         <p className="mt-8 text-sm text-legacy-blue-light">
-          No starred projects yet. Star a project from the sidebar to include it here.
+          No projects added yet. Add a project from the sidebar to include it here.
         </p>
       ) : (
         <>

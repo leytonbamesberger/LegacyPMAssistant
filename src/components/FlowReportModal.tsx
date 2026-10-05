@@ -7,6 +7,7 @@ import {
   type FlowReport,
   type FlowReportAnswers,
 } from '../lib/flowReports'
+import { FLOW_BUDGET_ITEMS, NO_BUDGET_CHECKS, type FlowBudgetChecklist } from '../../shared/flowBudget'
 import { Modal } from './Modal'
 
 /** Same modal/form used by the Flow Reports section rows and each project card's Flow badge. */
@@ -30,6 +31,7 @@ export function FlowReportModal({
     underbilledNotes: string | null,
     attn: string | null,
     company: string | null,
+    budget: FlowBudgetChecklist,
   ) => Promise<FlowReport | null>
   onSubmit: (
     projectId: string,
@@ -39,6 +41,7 @@ export function FlowReportModal({
     underbilledNotes: string | null,
     attn: string | null,
     company: string | null,
+    budget: FlowBudgetChecklist,
   ) => Promise<FlowReport | null>
 }) {
   const { instance, accounts } = useMsal()
@@ -52,6 +55,7 @@ export function FlowReportModal({
   const [underbilledNotes, setUnderbilledNotes] = useState('')
   const [attn, setAttn] = useState('')
   const [company, setCompany] = useState('')
+  const [budget, setBudget] = useState<FlowBudgetChecklist>(NO_BUDGET_CHECKS)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -67,6 +71,7 @@ export function FlowReportModal({
       setUnderbilledNotes(fetched?.underbilled_notes ?? '')
       setAttn(fetched?.attn ?? '')
       setCompany(fetched?.company ?? '')
+      setBudget(fetched ? pickBudget(fetched) : NO_BUDGET_CHECKS)
       setLoading(false)
     })()
     return () => {
@@ -84,6 +89,7 @@ export function FlowReportModal({
       underbilledNotes || null,
       attn || null,
       company || null,
+      budget,
     )
     if (saved) setReport(saved)
     setSaving(false)
@@ -99,6 +105,7 @@ export function FlowReportModal({
       underbilledNotes || null,
       attn || null,
       company || null,
+      budget,
     )
     if (saved) setReport(saved)
     setSaving(false)
@@ -197,6 +204,28 @@ export function FlowReportModal({
             />
           </label>
 
+          <fieldset className="rounded-md border border-legacy-blue-light/25 px-3 pb-3 pt-2">
+            <legend className="px-1 text-xs font-semibold text-legacy-blue-dark">
+              Monthly budget checklist
+            </legend>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-4">
+              {FLOW_BUDGET_ITEMS.map(({ key, label }) => (
+                <label key={key} className="flex items-center gap-2 text-sm text-legacy-blue-dark">
+                  <input
+                    type="checkbox"
+                    checked={budget[key]}
+                    onChange={(e) => setBudget((prev) => ({ ...prev, [key]: e.target.checked }))}
+                    className="h-3.5 w-3.5 accent-legacy-blue-dark"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-legacy-blue-light">
+              Optional — not needed to submit. Saved with this month's report.
+            </p>
+          </fieldset>
+
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -226,6 +255,17 @@ export function FlowReportModal({
   )
 }
 
+function pickBudget(report: FlowBudgetChecklist): FlowBudgetChecklist {
+  return {
+    budget_forecasted: report.budget_forecasted === true,
+    budget_projections_updated: report.budget_projections_updated === true,
+    budget_snapshots_taken: report.budget_snapshots_taken === true,
+    budget_sent_to_erp: report.budget_sent_to_erp === true,
+  }
+}
+
+/** Takes a date-only string (a calendar day, parsed as local so it doesn't slip a day west of UTC) or a full timestamp. */
 function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+  const date = iso.length === 10 ? new Date(`${iso}T00:00:00`) : new Date(iso)
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }

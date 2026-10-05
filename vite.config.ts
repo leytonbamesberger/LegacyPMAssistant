@@ -34,14 +34,12 @@ const ROUTES: DevRoute[] = [
   // middleware has no such limit, so it keeps one ROUTES entry per
   // (path, method) pair for clarity.
   { path: '/api/projects', method: 'POST', module: '/server/projectRoutes.ts', export: 'handleProjectsPost', arg: 'authAndBody' },
-  { path: '/api/projects', method: 'GET', module: '/server/projectRoutes.ts', export: 'handleProjectsList', arg: 'auth' },
+  { path: '/api/projects', method: 'GET', module: '/server/projectRoutes.ts', export: 'handleProjectsList', arg: 'authAndQuery' },
   { path: '/api/specs', method: 'POST', module: '/server/specRoutes.ts', export: 'handleSpecsSync', arg: 'authAndBody' },
   { path: '/api/specs', method: 'GET', module: '/server/specRoutes.ts', export: 'handleSpecsList', arg: 'authAndQuery' },
   { path: '/api/submittals/run', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleRunSubmittal', arg: 'authAndBody' },
   { path: '/api/submittals', method: 'GET', module: '/server/submittalRoutes.ts', export: 'handleGetSubmittal', arg: 'authAndQuery' },
   { path: '/api/submittals', method: 'POST', module: '/server/submittalRoutes.ts', export: 'handleCreateSubmittal', arg: 'authAndBody' },
-  { path: '/api/checklist', method: 'GET', module: '/server/checklistRoutes.ts', export: 'handleChecklistStatus', arg: 'authAndQuery' },
-  { path: '/api/checklist', method: 'POST', module: '/server/checklistRoutes.ts', export: 'handleChecklistPost', arg: 'authAndBody' },
   { path: '/api/flow-reports', method: 'GET', module: '/server/flowReportRoutes.ts', export: 'handleFlowReportsList', arg: 'authAndQuery' },
   { path: '/api/flow-reports', method: 'POST', module: '/server/flowReportRoutes.ts', export: 'handleFlowReportsPost', arg: 'authAndBody' },
   { path: '/api/tasks', method: 'GET', module: '/server/taskRoutes.ts', export: 'handleTasksList', arg: 'authAndQuery' },

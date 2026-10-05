@@ -1,9 +1,12 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { FlowReportAnswers } from '../shared/flowReportQuestions.js'
+import { FlowBudgetChecklist, NO_BUDGET_CHECKS } from '../shared/flowBudget.js'
+import { defaultFlowReportMonth, lastDayOfMonth, monthStartFor } from '../shared/period.js'
 
 export type { FlowReportAnswers }
+export { defaultFlowReportMonth, lastDayOfMonth }
 
-export interface FlowReportRecord {
+export interface FlowReportRecord extends FlowBudgetChecklist {
   id: string
   project_id: string
   month: string
@@ -17,33 +20,9 @@ export interface FlowReportRecord {
   company: string | null
 }
 
-function monthStartFor(date: Date): string {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)).toISOString().slice(0, 10)
-}
-
 /** First-of-month date string (YYYY-MM-DD) for the current calendar month, UTC. */
 export function currentMonthStart(): string {
   return monthStartFor(new Date())
-}
-
-/**
- * Default period for the flow report tool: day-of-month <= 14 defaults to
- * last month (still time to finish it), >= 15 defaults to this month. This
- * only decides which month pre-selects when the tool opens — the month
- * selector on the form can always reach any other month.
- */
-export function defaultFlowReportMonth(): string {
-  const now = new Date()
-  if (now.getUTCDate() <= 14) {
-    return monthStartFor(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)))
-  }
-  return monthStartFor(now)
-}
-
-/** Last calendar day of `month` (YYYY-MM-DD in, YYYY-MM-DD out) — the computed, non-editable due date. */
-export function lastDayOfMonth(month: string): string {
-  const [y, m] = month.split('-').map(Number)
-  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10)
 }
 
 function placeholderReport(projectId: string, month: string): FlowReportRecord {
@@ -59,6 +38,7 @@ function placeholderReport(projectId: string, month: string): FlowReportRecord {
     underbilled_notes: null,
     attn: null,
     company: null,
+    ...NO_BUDGET_CHECKS,
   }
 }
 
@@ -153,6 +133,7 @@ export async function saveFlowReportDraft(
   underbilledNotes: string | null,
   attn: string | null,
   company: string | null,
+  budget: Partial<FlowBudgetChecklist> = {},
 ): Promise<FlowReportRecord> {
   const { data: existing, error: selectError } = await admin
     .from('flow_reports')
@@ -175,6 +156,7 @@ export async function saveFlowReportDraft(
         underbilled_notes: underbilledNotes,
         attn,
         company,
+        ...budget, // only the boxes the client sent; the rest keep their stored value
         status,
       },
       { onConflict: 'project_id,month' },
@@ -194,6 +176,7 @@ export async function submitFlowReport(
   underbilledNotes: string | null,
   attn: string | null,
   company: string | null,
+  budget: Partial<FlowBudgetChecklist> | undefined,
   submittedBy: string,
 ): Promise<FlowReportRecord> {
   const { data, error } = await admin
@@ -207,6 +190,7 @@ export async function submitFlowReport(
         underbilled_notes: underbilledNotes,
         attn,
         company,
+        ...(budget ?? {}),
         status: 'completed',
         submitted_by: submittedBy,
         submitted_at: new Date().toISOString(),

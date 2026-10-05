@@ -1,13 +1,13 @@
-import type { ReactNode } from 'react'
 import { useIsAuthenticated } from '@azure/msal-react'
 import { useMsal } from '@azure/msal-react'
 import { InteractionStatus } from '@azure/msal-browser'
-import { Navigate } from 'react-router-dom'
+import { Navigate, Outlet } from 'react-router-dom'
 import { UnsavedWorkProvider } from '../contexts/UnsavedWorkContext'
 import { ProfileProvider } from '../contexts/ProfileContext'
 import { ProjectProvider } from '../contexts/ProjectContext'
-import { ChecklistProvider } from '../contexts/ChecklistContext'
 import { FlowReportProvider } from '../contexts/FlowReportContext'
+import { AppReadyProvider } from '../contexts/AppReadyContext'
+import { ProcoreProvider } from '../contexts/ProcoreContext'
 import { AppShell } from './AppShell'
 
 /**
@@ -15,13 +15,17 @@ import { AppShell } from './AppShell'
  * active Microsoft session. Waits for MSAL to finish any in-flight redirect
  * handling before deciding, so we don't bounce the user mid-login.
  *
- * Once authenticated, wraps the page in the shared project/checklist/flow-report
+ * Used as a layout route (pages render through <Outlet />), so the providers
+ * below mount ONCE and survive navigation between protected pages — the
+ * first-load gate (AppReadyProvider) therefore only ever shows on the initial load.
+ *
+ * Once authenticated, wraps the page in the shared project/flow-report
  * contexts and the `AppShell` chrome (header + sidebar) — every protected
- * route gets this for free. `ChecklistProvider`/`FlowReportProvider` live here
- * (not inside a single page) so the project cards and the header's checklist
- * panel read/write the same starred-project status.
+ * route gets this for free. `FlowReportProvider` lives here (not inside a
+ * single page) so every entry point (Tasks page, calendar) opens the same
+ * flow report modal and sees the same status.
  */
-export function ProtectedRoute({ children }: { children: ReactNode }) {
+export function ProtectedRoute() {
   const isAuthenticated = useIsAuthenticated()
   const { inProgress } = useMsal()
 
@@ -41,11 +45,15 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
     <UnsavedWorkProvider>
       <ProfileProvider>
         <ProjectProvider>
-          <ChecklistProvider>
-            <FlowReportProvider>
-              <AppShell>{children}</AppShell>
-            </FlowReportProvider>
-          </ChecklistProvider>
+          <FlowReportProvider>
+            <ProcoreProvider>
+              <AppReadyProvider>
+                <AppShell>
+                  <Outlet />
+                </AppShell>
+              </AppReadyProvider>
+            </ProcoreProvider>
+          </FlowReportProvider>
         </ProjectProvider>
       </ProfileProvider>
     </UnsavedWorkProvider>

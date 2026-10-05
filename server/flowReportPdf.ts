@@ -1,7 +1,7 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import PDFDocument from 'pdfkit'
 import { LEGACY_LOGO_PNG_BASE64 } from '../shared/legacyLogo.js'
-import { getCalendarMonthCompletionForMonth } from './checklist.js'
+import { FLOW_BUDGET_ITEMS } from '../shared/flowBudget.js'
 import { FLOW_REPORT_QUESTIONS, FlowReportAnswers } from '../shared/flowReportQuestions.js'
 import { FlowReportRecord } from './flowReports.js'
 
@@ -11,7 +11,6 @@ const PAGE_OPTS = { size: 'LETTER' as const, margins: { top: 0, bottom: 0, left:
 const NAVY = '#003058'
 const RED = '#ee3428'
 const LIGHT_TEXT = '#18385f'
-const BUDGET_ITEM_NAMES = ['Forecasted', 'Projections Updated', 'Snapshots Taken', 'Sent to ERP']
 
 // Letter-page signature block: pre-gap + "Respectfully Submitted," + "LEGACY
 // MECHANICAL, INC." + signing space + name + title. Kept together with the
@@ -48,14 +47,13 @@ export async function generateFlowReportPdf(
   month: string,
   currentProfileId: string,
 ): Promise<Buffer> {
-  const [projectsResult, reportsResult, profilesResult, completionByProject] = await Promise.all([
+  const [projectsResult, reportsResult, profilesResult] = await Promise.all([
     admin
       .from('projects')
       .select('id, job_number, name, gc, pm_id, apm_id')
       .in('id', projectIds),
     admin.from('flow_reports').select('*').eq('month', month).in('project_id', projectIds),
     admin.from('profiles').select('id, display_name, title'),
-    getCalendarMonthCompletionForMonth(admin, projectIds, month),
   ])
   if (projectsResult.error) throw new Error(projectsResult.error.message)
   if (reportsResult.error) throw new Error(reportsResult.error.message)
@@ -77,7 +75,7 @@ export async function generateFlowReportPdf(
 
   const generatedDate = formatDate(new Date())
 
-  drawCoverPage(doc, projectsByJobNumber, reportsByProjectId, completionByProject, generatedDate)
+  drawCoverPage(doc, projectsByJobNumber, reportsByProjectId, generatedDate)
 
   for (const project of projectsByJobNumber) {
     doc.addPage(PAGE_OPTS)
@@ -113,7 +111,6 @@ function drawCoverPage(
   doc: PDFKit.PDFDocument,
   projects: ExportProject[],
   reportsByProjectId: Map<string, FlowReportRecord>,
-  completionByProject: Map<string, Map<string, boolean>>,
   generatedDate: string,
 ) {
   let y = drawLogo(doc, 40, 180, 20)
@@ -132,15 +129,16 @@ function drawCoverPage(
 
   for (const project of projects) {
     y = ensureSpace(doc, y, 34)
-    const completion = completionByProject.get(project.id)
+    // The four checkmarks come straight off this month's flow report; no report = all red X.
+    const report = reportsByProjectId.get(project.id)
     const label = `${project.job_number ?? '—'} — ${project.name}`
     doc.font('Helvetica-Bold').fontSize(10).fillColor('black').text(label, PAGE_MARGIN, y)
     y += 14
 
     let x = PAGE_MARGIN + 12
     doc.font('Helvetica').fontSize(9)
-    for (const itemName of BUDGET_ITEM_NAMES) {
-      const done = completion?.get(itemName) ?? false
+    for (const { key, label: itemName } of FLOW_BUDGET_ITEMS) {
+      const done = report?.[key] === true
       if (done) drawCheckmark(doc, x, y + 1)
       else drawX(doc, x, y + 1)
       doc.fillColor(done ? 'black' : LIGHT_TEXT).text(itemName, x + 12, y, { continued: false })
@@ -288,7 +286,7 @@ function drawCheckmark(doc: PDFKit.PDFDocument, x: number, y: number) {
     .restore()
 }
 
-/** Same bounding box/placement as drawCheckmark — the "not completed" mark for a Budget item. */
+/** Same bounding box/placement as drawCheckmark — the "not done" mark for a Budget item. */
 function drawX(doc: PDFKit.PDFDocument, x: number, y: number) {
   doc
     .save()

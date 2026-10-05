@@ -1,11 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMsal } from '@azure/msal-react'
-import {
-  disconnectProcore,
-  getProcoreStatus,
-  startProcoreConnect,
-  type ProcoreStatus,
-} from '../lib/procore'
+import { disconnectProcore, startProcoreConnect } from '../lib/procore'
+import { useProcore } from '../contexts/ProcoreContext'
 
 /**
  * Procore connection row inside the profile dropdown. Shows one of:
@@ -17,23 +13,9 @@ export function ProcoreConnectionItem() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
 
-  const [status, setStatus] = useState<ProcoreStatus | null>(null)
-  const [loading, setLoading] = useState(true)
+  // The status itself is loaded once by ProcoreProvider (the first-load gate waits on it).
+  const { status, loading, refresh } = useProcore()
   const [busy, setBusy] = useState(false)
-
-  const refresh = useCallback(async () => {
-    if (!account) {
-      setLoading(false)
-      return
-    }
-    setLoading(true)
-    setStatus(await getProcoreStatus(instance, account))
-    setLoading(false)
-  }, [instance, account])
-
-  useEffect(() => {
-    void refresh()
-  }, [refresh])
 
   async function connect() {
     if (!account) return

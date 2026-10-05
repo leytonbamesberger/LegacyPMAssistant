@@ -117,22 +117,19 @@ export function RefreshIcon({
   )
 }
 
-export function StarIcon({
-  filled,
+/** Plus when the project isn't Added yet, filled checkmark circle once it is. */
+export function AddProjectIcon({
+  added,
   ...props
-}: SVGProps<SVGSVGElement> & { filled?: boolean }) {
-  return (
-    <svg {...base} {...props} fill={filled ? 'currentColor' : 'none'}>
-      <path d="m12 4 2.3 4.7 5.2.8-3.8 3.7.9 5.2-4.6-2.4-4.6 2.4.9-5.2L4 9.5l5.2-.8L12 4Z" />
-    </svg>
-  )
-}
-
-export function ChecklistPanelIcon(props: SVGProps<SVGSVGElement>) {
+}: SVGProps<SVGSVGElement> & { added?: boolean }) {
   return (
     <svg {...base} {...props}>
-      <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
-      <path d="m8 12 2.5 2.5L16 9" />
+      <circle cx="12" cy="12" r="9" fill={added ? 'currentColor' : 'none'} />
+      {added ? (
+        <path d="m8 12.5 2.8 2.8L16 9.5" stroke="white" />
+      ) : (
+        <path d="M12 8v8M8 12h8" />
+      )}
     </svg>
   )
 }

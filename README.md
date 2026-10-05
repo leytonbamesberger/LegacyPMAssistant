@@ -109,7 +109,13 @@ Microsoft-token requests through our own `/api` routes," not as an RLS policy.)
 [`001_lock_down_profiles_rls.sql`](supabase/migrations/001_lock_down_profiles_rls.sql),
 [`002_procore_connections_unique.sql`](supabase/migrations/002_procore_connections_unique.sql),
 [`003_projects_and_starred.sql`](supabase/migrations/003_projects_and_starred.sql),
-[`004_submittal_checker.sql`](supabase/migrations/004_submittal_checker.sql).
+[`004_submittal_checker.sql`](supabase/migrations/004_submittal_checker.sql),
+[`005_reset_initiation_budget_into_flow_reports.sql`](supabase/migrations/005_reset_initiation_budget_into_flow_reports.sql)
+(idempotent — safe to re-run),
+[`006_task_meeting_date.sql`](supabase/migrations/006_task_meeting_date.sql).
+
+`schema.sql` is a clean snapshot of the live database for a **fresh** project; it is
+not a history and must not be re-run against live data.
 
 ## Procore connection
 
@@ -273,15 +279,15 @@ non-overlapping way to give every route `includeFiles` while still giving two
 specific routes a longer `maxDuration`.
 
 **A fourth: Vercel's Hobby plan caps a deployment at 12 Serverless Functions**
-(one per file in `api/`, counting recursively). **We're at 12/12 — the cap is
-maxed out.** Any new route MUST be added as another action on an existing file
+(one per file in `api/`, counting recursively). **We're at 11/12 — one slot
+free** (the old `api/checklist.ts` was retired when checklist completion moved
+into `tasks`). Prefer adding a new route as another action on an existing file
 (dispatch on an `action` field in the POST body — see `handleProjectsPost` in
-`projectRoutes.ts`, or `handleTasksPost` in `taskRoutes.ts`, for the pattern),
-never as a new `api/*.ts` file, until either a file is consolidated away or
-the project upgrades off the Hobby plan. Check `find api -name "*.ts" | wc -l`
+`projectRoutes.ts`, or `handleTasksPost` in `taskRoutes.ts`, for the pattern)
+and keep the spare slot for something that truly needs its own file. Check `find api -name "*.ts" | wc -l`
 before adding anything. Routes that only differ by HTTP method already share
 one file via `vercelRouteMulti({ GET: ..., POST: ... })` (see
-`api/projects/index.ts`, `api/checklist.ts`, `api/flow-reports.ts`, or
+`api/projects/index.ts`, `api/flow-reports.ts`, or
 `api/tasks.ts`). This is a platform limit, not a code smell — don't
 "un-consolidate" these back into separate files later without a reason.
 
@@ -319,13 +325,15 @@ api/                   thin Vercel adapters (12 of 12 files — Hobby plan caps 
   procore/
     authorize.ts  callback.ts  status.ts  disconnect.ts
   projects/
-    index.ts (GET /api/projects; POST dispatches on body.action:
-              'sync' | 'star' | 'update')
-  checklist.ts (GET status; POST dispatches on body.action: 'toggle' | 'log')
+    index.ts (GET /api/projects, or ?initiationCatalogFor=<id> for the wizard's
+              checklist, or ?overview=1 for the Overview grid; POST dispatches on
+              body.action: 'sync' | 'star' | 'update' | 'initiate' |
+              'overview-add' | 'overview-remove')
   flow-reports.ts (GET this month's status; POST dispatches on body.action:
                    'save' | 'submit')
-  tasks.ts (GET tasks visible to caller; POST dispatches on body.action:
-            'create' | 'set-status' | 'delete')
+  tasks.ts (GET tasks visible to caller, filtered by projectId/assigneeId/
+            categories and status=open|complete — complete is paginated;
+            POST dispatches on body.action: 'create' | 'set-status' | 'delete')
   specs/
     index.ts (GET + POST /api/specs)
   submittals/
@@ -343,17 +351,30 @@ server/                framework-agnostic handlers + logic
   procoreApi.ts        generic Procore REST GET (companies, projects, specs)
   projects.ts          sync/list/star/update logic for the project cache
   projectRoutes.ts     the /api/projects handlers (list, and the sync/star/
-                       update actions dispatched from handleProjectsPost)
-  checklist.ts         status/toggle/log logic for the project checklist
-  checklistRoutes.ts   the /api/checklist handlers (status, and the toggle/
-                       log actions dispatched from handleChecklistPost)
+                       update/initiate/overview-* actions dispatched from
+                       handleProjectsPost)
+  overview.ts          the Overview grid: per-user project selection (seeded once
+                       from Added, then independent), and which checklist cells
+                       show a check — read off `tasks`
+  selectAll.ts         .range() paging helper — PostgREST silently truncates any
+                       response at 1000 rows, and task history outgrows that
+  checklist.ts         the checklist CATALOG for the initiation wizard
+                       (completion itself lives in tasks — no separate log). The
+                       four Budget items are no longer catalog items: they're
+                       checkboxes on the flow report (see shared/flowBudget.ts)
+  initiation.ts        initiateProject(): the wizard's single atomic-ish write
+                       (exclusions, custom items, config, one task per item)
+  generatedTasks.ts    PM/APM assignee sync for a project's open checklist tasks
+                       (flow reports are NOT task rows any more)
   flowReports.ts       this-month status/save/submit logic for flow reports
                        (synthesizes a not_started placeholder per project
                        until a real row is saved — no cron, see schema.sql)
   flowReportRoutes.ts  the /api/flow-reports handlers (list, and the save/
                        submit actions dispatched from handleFlowReportsPost)
-  tasks.ts             visibility (assigned_to/assigned_by, no RLS backstop —
-                       see schema.sql) + create/status/delete logic
+  tasks.ts             visibility (task_assignees/assigned_by, no RLS backstop —
+                       see schema.sql), the filtered/paginated listing behind
+                       Tasks and Archive, create/status/delete, and the
+                       "completing a recurring task creates the next row" rule
   taskRoutes.ts        the /api/tasks handlers (list, and the create/
                        set-status/delete actions dispatched from handleTasksPost)
   pdf.ts               extractPdfText() — unpdf wrapper
