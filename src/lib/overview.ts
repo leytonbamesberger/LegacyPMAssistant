@@ -1,29 +1,33 @@
 import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
 import { apiFetch } from './apiClient'
 import type { FlowBudgetChecklist } from '../../shared/flowBudget'
+import type { OverviewView } from '../../shared/overviewView'
 
 export interface OverviewColumn {
   id: string
   name: string
-  phase: 'setup' | 'recurring'
+  phase: 'setup' | 'recurring' | 'closeout'
 }
 
 export interface OverviewRow {
   project_id: string
+  /** The project's PM right now (rows are grouped under it). */
+  pm_id: string | null
   /** False: show the merged "Initiate this project" cell instead of checklist cells (FLOW values are still real). */
   initiated: boolean
   /** checklist_item_ids that show a check. */
   done: string[]
-  /** checklist_item_ids that don't apply to this project (shown as a disabled box). Everything else applies, not done. */
+  /** checklist_item_ids that don't apply to this project (shown as a disabled box; for closeout: it has no task for the item). Everything else applies, not done. */
   na: string[]
   /** Current period's flow report: submitted, and its four budget boxes. */
   flow: { report: boolean } & FlowBudgetChecklist
 }
 
 export interface OverviewData {
+  /** The saved "Choose a View" selection. */
+  view: OverviewView
   columns: OverviewColumn[]
-  /** Everything picked for Overview, initiated or not (uninitiated ones get no row yet). */
-  selectedProjectIds: string[]
+  /** One per project in the view (Added, the picked PMs' projects, individual picks), initiated or not. */
   rows: OverviewRow[]
 }
 
@@ -34,17 +38,16 @@ export function fetchOverview(
   return apiFetch<OverviewData>(instance, account, '/api/projects?overview=1')
 }
 
-/** Edits only the Overview selection — never the user's Added projects. */
-export async function setOverviewProject(
+/** Saves the "Choose a View" selection (never touches the user's Added projects). Returns the stored view, or null on failure. */
+export async function saveOverviewView(
   instance: IPublicClientApplication,
   account: AccountInfo,
-  projectId: string,
-  included: boolean,
-): Promise<boolean> {
-  const body = await apiFetch(instance, account, '/api/projects', {
+  view: OverviewView,
+): Promise<OverviewView | null> {
+  const body = await apiFetch<{ view: OverviewView }>(instance, account, '/api/projects', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ action: included ? 'overview-add' : 'overview-remove', projectId }),
+    body: JSON.stringify({ action: 'overview-view', view }),
   })
-  return body !== null
+  return body?.view ?? null
 }

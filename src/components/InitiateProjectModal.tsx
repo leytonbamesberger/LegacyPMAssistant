@@ -4,18 +4,24 @@ import { useProfile } from '../contexts/ProfileContext'
 import {
   fetchInitiationCatalog,
   initiateProject,
-  type InitiationCatalogItem,
   type InitiationPayload,
 } from '../lib/initiation'
 import type { Project } from '../lib/projects'
-import type { CadenceUnit } from '../../shared/period'
+import {
+  EMPTY_SETUP,
+  emptyRecurring,
+  recurringScheduleValid,
+  setupDatesState,
+  toWizardItem,
+  type RecurringConfig,
+  type SetupConfig,
+  type WizardItem,
+} from '../lib/wizardItems'
 import { Modal } from './Modal'
 import { ProfileSearchSelect } from './ProfileSearchSelect'
+import { inputClass, RecurringScheduleStep, SetupDatesStep } from './WizardSteps'
 
 type Step = 1 | 2 | 3 | 4 | 5
-
-/** Step 2 columns: the name takes the slack; Done and date/TBD are fixed so controls align across rows. */
-const SETUP_GRID = 'grid grid-cols-[minmax(0,1fr)_3rem_14rem] items-center gap-x-3'
 
 const STEP_TITLE: Record<Step, string> = {
   1: 'Setup items',
@@ -24,50 +30,6 @@ const STEP_TITLE: Record<Step, string> = {
   4: 'Recurring schedule',
   5: 'Confirm PM / APM',
 }
-
-/** One checklist row in the wizard: a catalog item, or a custom one not saved yet (itemId null). */
-interface WizardItem {
-  key: string
-  itemId: string | null
-  name: string
-  /** Meeting items (checklist_items.is_meeting) may be left TBD. */
-  isMeeting: boolean
-  defaultCadence: { value: number; unit: CadenceUnit }
-}
-
-interface SetupConfig {
-  complete: boolean
-  date: string
-  tbd: boolean
-}
-
-interface RecurringConfig {
-  startDate: string
-  time: string
-  value: string
-  unit: CadenceUnit
-}
-
-const EMPTY_SETUP: SetupConfig = { complete: false, date: '', tbd: false }
-
-function toWizardItem(item: InitiationCatalogItem): WizardItem {
-  const days = item.cadence_days
-  return {
-    key: item.id,
-    itemId: item.id,
-    name: item.name,
-    isMeeting: item.is_meeting === true,
-    defaultCadence:
-      days && days % 7 === 0
-        ? { value: days / 7, unit: 'week' }
-        : days
-          ? { value: days, unit: 'day' }
-          : { value: 1, unit: 'week' },
-  }
-}
-
-const inputClass =
-  'rounded border border-legacy-blue-light/30 px-2 py-1 text-sm text-legacy-blue-dark focus:border-legacy-blue-dark focus:outline-none'
 
 /**
  * Five-step project initiation wizard. All choices live in this component's
@@ -142,13 +104,7 @@ export function InitiateProjectModal({
   const patchSetup = (key: string, patch: Partial<SetupConfig>) =>
     setSetupConfig((prev) => ({ ...prev, [key]: { ...(prev[key] ?? EMPTY_SETUP), ...patch } }))
 
-  const getRecurring = (item: WizardItem): RecurringConfig =>
-    recurringConfig[item.key] ?? {
-      startDate: '',
-      time: '',
-      value: String(item.defaultCadence.value),
-      unit: item.defaultCadence.unit,
-    }
+  const getRecurring = (item: WizardItem): RecurringConfig => recurringConfig[item.key] ?? emptyRecurring(item)
   const patchRecurring = (item: WizardItem, patch: Partial<RecurringConfig>) =>
     setRecurringConfig((prev) => ({ ...prev, [item.key]: { ...getRecurring(item), ...patch } }))
 
@@ -190,27 +146,11 @@ export function InitiateProjectModal({
     setItems((prev) => [...prev, item])
   }
 
-  const bundleItems = setupItems.filter((i) => !i.isMeeting)
-  const meetingItems = setupItems.filter((i) => i.isMeeting)
-  // A meeting is satisfied by ONE of: a date, TBD, or Done. A date (or Done) completes it; TBD leaves it open.
-  const meetingComplete = (key: string) => {
-    const cfg = getSetup(key)
-    return cfg.complete || cfg.date !== ''
-  }
-  // "Setup complete by" is needed while anything is still open: a non-meeting item not Done, or a TBD meeting.
-  const completeByRequired =
-    bundleItems.some((i) => !getSetup(i.key).complete) ||
-    meetingItems.some((i) => !meetingComplete(i.key))
-  const setupDatesValid =
-    (!completeByRequired || setupCompleteBy !== '') &&
-    meetingItems.every((item) => meetingComplete(item.key) || getSetup(item.key).tbd)
-  const recurringScheduleValid = recurringItems.every((item) => {
-    const cfg = getRecurring(item)
-    return cfg.startDate !== '' && Number(cfg.value) > 0
-  })
+  const { meetingComplete, valid: setupDatesValid } = setupDatesState(setupItems, getSetup, setupCompleteBy)
+  const recurringValid = recurringScheduleValid(recurringItems, getRecurring)
 
   const canAdvance =
-    step === 2 ? setupDatesValid : step === 4 ? recurringScheduleValid : true
+    step === 2 ? setupDatesValid : step === 4 ? recurringValid : true
 
   async function handleConfirm() {
     if (!account || submitting) return
@@ -241,7 +181,6 @@ export function InitiateProjectModal({
           itemId: item.itemId,
           newName: item.itemId ? null : item.name,
           startDate: cfg.startDate,
-          timeOfDay: cfg.time || null,
           cadenceValue: Number(cfg.value),
           cadenceUnit: cfg.unit,
         }
@@ -301,121 +240,16 @@ export function InitiateProjectModal({
             )}
 
             {step === 2 && (
-              <div className="space-y-3">
-                <p className="text-sm text-legacy-blue-light">
-                  Tick Done for anything already complete. Set the date by which setup should be
-                  finished. Enter meeting dates, or leave meetings TBD.
-                </p>
-                {setupItems.length === 0 && (
-                  <p className="py-3 text-sm text-legacy-blue-light">No Setup items selected.</p>
-                )}
-
-                {bundleItems.length > 0 && (
-                  <label className="block text-xs font-medium text-legacy-blue-dark">
-                    Setup complete by
-                    {completeByRequired ? (
-                      <span className="ml-1 text-legacy-red" title="Required">
-                        *
-                      </span>
-                    ) : (
-                      <span className="ml-1 font-normal text-legacy-blue-light">
-                        (optional — everything is complete)
-                      </span>
-                    )}
-                    <input
-                      type="date"
-                      value={setupCompleteBy}
-                      onChange={(e) => setSetupCompleteBy(e.target.value)}
-                      aria-required={completeByRequired}
-                      className={`${inputClass} mt-1 block w-[9.5rem]`}
-                    />
-                  </label>
-                )}
-
-                {bundleItems.length > 0 && (
-                  <div>
-                    <div className={`${SETUP_GRID} text-xs font-medium text-legacy-blue-light`}>
-                      <span />
-                      <span className="text-center">Done</span>
-                      <span />
-                    </div>
-                    <ul className="divide-y divide-legacy-blue-light/15 border-t border-legacy-blue-light/15">
-                      {bundleItems.map((item) => (
-                        <li key={item.key} className={`${SETUP_GRID} py-2`}>
-                          <span className="min-w-0 break-words text-sm text-legacy-blue-dark">
-                            {item.name}
-                          </span>
-                          <span className="flex justify-center">
-                            <input
-                              type="checkbox"
-                              checked={getSetup(item.key).complete}
-                              onChange={(e) => patchSetup(item.key, { complete: e.target.checked })}
-                              aria-label={`${item.name} done`}
-                              className="h-3.5 w-3.5 accent-legacy-blue-dark"
-                            />
-                          </span>
-                          <span />
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {meetingItems.length > 0 && (
-                  <div>
-                    <div className={`${SETUP_GRID} text-xs font-medium text-legacy-blue-light`}>
-                      <span className="text-legacy-blue-dark">Meetings</span>
-                      <span className="text-center">Done</span>
-                      <span>Meeting date</span>
-                    </div>
-                    <ul className="divide-y divide-legacy-blue-light/15 border-t border-legacy-blue-light/15">
-                      {meetingItems.map((item) => {
-                        const cfg = getSetup(item.key)
-                        return (
-                          <li key={item.key} className={`${SETUP_GRID} py-2`}>
-                            <span className="min-w-0 break-words text-sm text-legacy-blue-dark">
-                              {item.name}
-                            </span>
-                            <span className="flex justify-center">
-                              <input
-                                type="checkbox"
-                                checked={cfg.complete}
-                                onChange={(e) => patchSetup(item.key, { complete: e.target.checked })}
-                                aria-label={`${item.name} done`}
-                                className="h-3.5 w-3.5 accent-legacy-blue-dark"
-                              />
-                            </span>
-                            <span className="flex items-center gap-3">
-                              <input
-                                type="date"
-                                value={cfg.date}
-                                disabled={cfg.tbd}
-                                onChange={(e) => patchSetup(item.key, { date: e.target.value })}
-                                aria-label={`${item.name} date`}
-                                className={`${inputClass} w-[9.5rem] shrink-0 disabled:bg-legacy-blue-light/10`}
-                              />
-                              <label className="flex items-center gap-1.5 text-xs text-legacy-blue-dark">
-                                <input
-                                  type="checkbox"
-                                  checked={cfg.tbd}
-                                  onChange={(e) =>
-                                    patchSetup(item.key, {
-                                      tbd: e.target.checked,
-                                      date: e.target.checked ? '' : cfg.date,
-                                    })
-                                  }
-                                  className="h-3.5 w-3.5 accent-legacy-blue-dark"
-                                />
-                                TBD
-                              </label>
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                )}
-              </div>
+              <SetupDatesStep
+                intro={
+                  'Tick Done for anything already complete. Set the date by which setup should be finished. Enter meeting dates, or leave meetings TBD.'
+                }
+                items={setupItems}
+                getSetup={getSetup}
+                patchSetup={patchSetup}
+                completeBy={setupCompleteBy}
+                onCompleteBy={setSetupCompleteBy}
+              />
             )}
 
             {step === 3 && (
@@ -430,61 +264,12 @@ export function InitiateProjectModal({
             )}
 
             {step === 4 && (
-              <div className="space-y-1">
-                <p className="text-sm text-legacy-blue-light">
-                  Choose when each item first comes due and how often it repeats.
-                </p>
-                {recurringItems.length === 0 && (
-                  <p className="py-3 text-sm text-legacy-blue-light">No Recurring items selected.</p>
-                )}
-                <ul className="divide-y divide-legacy-blue-light/15">
-                  {recurringItems.map((item) => {
-                    const cfg = getRecurring(item)
-                    return (
-                      <li key={item.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
-                        <span className="min-w-[12rem] flex-1 text-sm text-legacy-blue-dark">
-                          {item.name}
-                        </span>
-                        <input
-                          type="date"
-                          value={cfg.startDate}
-                          onChange={(e) => patchRecurring(item, { startDate: e.target.value })}
-                          aria-label={`${item.name} start date`}
-                          className={`${inputClass} w-[9.5rem]`}
-                        />
-                        <input
-                          type="time"
-                          value={cfg.time}
-                          onChange={(e) => patchRecurring(item, { time: e.target.value })}
-                          aria-label={`${item.name} time`}
-                          className={`${inputClass} w-[6.5rem]`}
-                        />
-                        <span className="flex items-center gap-1 text-xs text-legacy-blue-dark">
-                          every
-                          <input
-                            type="number"
-                            min={1}
-                            value={cfg.value}
-                            onChange={(e) => patchRecurring(item, { value: e.target.value })}
-                            aria-label={`${item.name} cadence`}
-                            className={`${inputClass} w-14`}
-                          />
-                          <select
-                            value={cfg.unit}
-                            onChange={(e) => patchRecurring(item, { unit: e.target.value as CadenceUnit })}
-                            aria-label={`${item.name} cadence unit`}
-                            className={inputClass}
-                          >
-                            <option value="day">days</option>
-                            <option value="week">weeks</option>
-                            <option value="month">months</option>
-                          </select>
-                        </span>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </div>
+              <RecurringScheduleStep
+                intro="Choose when each item first comes due and how often it repeats."
+                items={recurringItems}
+                getRecurring={getRecurring}
+                patchRecurring={patchRecurring}
+              />
             )}
 
             {step === 5 && (

@@ -8,7 +8,14 @@ import {
   updateProject,
 } from './projects.js'
 import { getInitiationCatalog } from './checklist.js'
-import { addOverviewProject, getOverview, removeOverviewProject } from './overview.js'
+import { getOverview, saveOverviewView } from './overview.js'
+import {
+  closeoutProject,
+  editProject,
+  getProjectEditCatalog,
+  parseCloseoutPayload,
+  parseEditPayload,
+} from './projectEdit.js'
 import { initiateProject, parseInitiationPayload } from './initiation.js'
 import { TaskRuleError } from './tasks.js'
 
@@ -41,10 +48,13 @@ async function loadProjectsResult(
  *
  * GET /api/projects?overview=1 instead returns the caller's Overview grid
  * (see server/overview.ts).
+ *
+ * GET /api/projects?editCatalogFor=<projectId> instead returns what the Edit Project and Closeout
+ * Project modals need (see server/projectEdit.ts).
  */
 export async function handleProjectsList(
   authorizationHeader: string | undefined,
-  query: { initiationCatalogFor?: string; overview?: string } = {},
+  query: { initiationCatalogFor?: string; overview?: string; editCatalogFor?: string } = {},
 ): Promise<ApiResult> {
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
@@ -57,6 +67,21 @@ export async function handleProjectsList(
         status: 500,
         json: {
           error: 'Could not load the overview',
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }
+    }
+  }
+
+  if (query.editCatalogFor) {
+    try {
+      return { status: 200, json: await getProjectEditCatalog(resolved.admin, query.editCatalogFor) }
+    } catch (err) {
+      if (err instanceof TaskRuleError) return { status: err.status, json: { error: err.message } }
+      return {
+        status: 500,
+        json: {
+          error: 'Could not load the project',
           detail: err instanceof Error ? err.message : String(err),
         },
       }
@@ -107,34 +132,48 @@ async function handleProjectsInitiate(
   }
 }
 
-/**
- * The 'overview-add' / 'overview-remove' actions of POST /api/projects — body { projectId }.
- * Edits only the Overview selection; the caller's Added list is untouched.
- */
-async function handleProjectsOverviewEdit(
+/** The 'overview-view' action of POST /api/projects — body { view: { mine, pm_ids, project_ids } }. Edits only the Overview selection. */
+async function handleProjectsOverviewView(
   authorizationHeader: string | undefined,
   body: unknown,
-  mode: 'add' | 'remove',
 ): Promise<ApiResult> {
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
 
-  const { projectId } = (body ?? {}) as { projectId?: unknown }
-  if (typeof projectId !== 'string') {
-    return { status: 400, json: { error: '"projectId" (string) is required' } }
+  const { view } = (body ?? {}) as { view?: unknown }
+  if (view === null || typeof view !== 'object') {
+    return { status: 400, json: { error: '"view" (object) is required' } }
   }
 
   try {
-    const edit = mode === 'add' ? addOverviewProject : removeOverviewProject
-    await edit(resolved.admin, resolved.profileId, projectId)
-    return { status: 200, json: { ok: true } }
+    return { status: 200, json: { view: await saveOverviewView(resolved.admin, resolved.profileId, view) } }
   } catch (err) {
     return {
       status: 500,
       json: {
-        error: 'Could not update the overview',
+        error: 'Could not save the overview view',
         detail: err instanceof Error ? err.message : String(err),
       },
+    }
+  }
+}
+
+/** Shared by the Edit Project and Closeout Project actions: rule rejections are 4xx, anything else a 500 with the database's reason. */
+async function runProjectChange(
+  authorizationHeader: string | undefined,
+  label: string,
+  run: (admin: Parameters<typeof editProject>[0], profileId: string) => Promise<unknown>,
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+  try {
+    return { status: 200, json: { ok: true, ...((await run(resolved.admin, resolved.profileId)) as object) } }
+  } catch (err) {
+    if (err instanceof TaskRuleError) return { status: err.status, json: { error: err.message } }
+    console.error(`[projects] ${label} failed:`, err)
+    return {
+      status: 500,
+      json: { error: `Could not ${label}`, detail: err instanceof Error ? err.message : String(err) },
     }
   }
 }
@@ -291,7 +330,7 @@ export async function handleProjectsUpdate(
 }
 
 /**
- * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update' | 'initiate' | 'overview-add' | 'overview-remove', ... }.
+ * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update' | 'initiate' | 'edit-project' | 'closeout' | 'overview-view', ... }.
  * One file/handler per verb regardless of action count, to stay well under
  * Vercel's Hobby-plan 12-Serverless-Function cap (see vercelAdapter.ts).
  */
@@ -309,16 +348,22 @@ export async function handleProjectsPost(
       return handleProjectsUpdate(authorizationHeader, body)
     case 'initiate':
       return handleProjectsInitiate(authorizationHeader, body)
-    case 'overview-add':
-      return handleProjectsOverviewEdit(authorizationHeader, body, 'add')
-    case 'overview-remove':
-      return handleProjectsOverviewEdit(authorizationHeader, body, 'remove')
+    case 'overview-view':
+      return handleProjectsOverviewView(authorizationHeader, body)
+    case 'edit-project':
+      return runProjectChange(authorizationHeader, 'save the project', (admin, profileId) =>
+        editProject(admin, profileId, parseEditPayload(body)),
+      )
+    case 'closeout':
+      return runProjectChange(authorizationHeader, 'close out the project', (admin, profileId) =>
+        closeoutProject(admin, profileId, parseCloseoutPayload(body)),
+      )
     default:
       return {
         status: 400,
         json: {
           error:
-            '"action" must be "sync", "star", "update", "initiate", "overview-add", or "overview-remove"',
+            '"action" must be "sync", "star", "update", "initiate", "edit-project", "closeout", or "overview-view"',
         },
       }
   }

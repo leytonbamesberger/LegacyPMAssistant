@@ -1,5 +1,6 @@
 import { SupabaseClient } from '@supabase/supabase-js'
 import { defaultFlowReportMonth } from '../shared/period.js'
+import { normalizeOverviewView, type OverviewView } from '../shared/overviewView.js'
 import type { FlowBudgetChecklist } from '../shared/flowBudget.js'
 import { getFlowReportsForMonth } from './flowReports.js'
 import { selectAll } from './selectAll.js'
@@ -7,22 +8,31 @@ import { selectAll } from './selectAll.js'
 export interface OverviewColumn {
   id: string
   name: string
-  phase: 'setup' | 'recurring'
+  phase: 'setup' | 'recurring' | 'closeout'
 }
 
 /** The current period's flow report for one project: submitted, plus its four budget boxes. */
 export type OverviewFlow = { report: boolean } & FlowBudgetChecklist
 
 export interface OverviewData {
+  /** The caller's saved "Choose a View" selection. */
+  view: OverviewView
   columns: OverviewColumn[]
-  /** Everything the user picked for Overview, initiated or not (uninitiated ones get no row). */
-  selectedProjectIds: string[]
   /**
-   * One per selected *initiated* project. `done` = checklist_item_ids shown checked;
-   * `na` = ids that don't apply to this project (excluded default, or another project's
-   * custom item) — shown as a disabled box. Every other column is "applies, not done".
+   * One per project in the view (the union of Added / the picked PMs' projects / picked projects),
+   * initiated or not. `done` = checklist_item_ids shown checked; `na` = ids that don't apply to this
+   * project (excluded default, another project's custom item, or a closeout item it has no task for) —
+   * shown as a disabled box. Every other column is "applies, not done". An uninitiated project has
+   * empty done/na (the page shows one merged "Initiate this project" cell) but real `flow` values.
    */
-  rows: { project_id: string; initiated: boolean; done: string[]; na: string[]; flow: OverviewFlow }[]
+  rows: {
+    project_id: string
+    pm_id: string | null
+    initiated: boolean
+    done: string[]
+    na: string[]
+    flow: OverviewFlow
+  }[]
 }
 
 interface InstanceRow {
@@ -57,82 +67,60 @@ export function currentCycleComplete(
   return dated[i].status === 'complete'
 }
 
-/** First open: seed the selection from the user's Added projects, once (the flag stops a later "remove everything" re-seeding). */
-async function ensureSeeded(admin: SupabaseClient, profileId: string): Promise<void> {
-  const { data: profile, error } = await admin
-    .from('profiles')
-    .select('overview_seeded')
-    .eq('id', profileId)
-    .single()
+/** The caller's saved view (the column defaults to Added-only, so a missing/odd value is treated the same). */
+export async function getOverviewView(admin: SupabaseClient, profileId: string): Promise<OverviewView> {
+  const { data, error } = await admin.from('profiles').select('overview_view').eq('id', profileId).single()
   if (error) throw new Error(error.message)
-  if (profile.overview_seeded) return
+  return normalizeOverviewView(data?.overview_view)
+}
 
-  const { data: starred, error: starredError } = await admin
-    .from('user_starred_projects')
-    .select('project_id')
-    .eq('profile_id', profileId)
-  if (starredError) throw new Error(starredError.message)
+export async function saveOverviewView(admin: SupabaseClient, profileId: string, raw: unknown): Promise<OverviewView> {
+  const view = normalizeOverviewView(raw)
+  const { error } = await admin.from('profiles').update({ overview_view: view }).eq('id', profileId)
+  if (error) throw new Error(error.message)
+  return view
+}
 
-  if ((starred ?? []).length > 0) {
-    // ignoreDuplicates: two tabs opening Overview at once must not trip over each other.
-    const { error: seedError } = await admin.from('user_overview_projects').upsert(
-      (starred ?? []).map((r) => ({ user_id: profileId, project_id: r.project_id })),
-      { onConflict: 'user_id,project_id', ignoreDuplicates: true },
-    )
-    if (seedError) throw new Error(seedError.message)
+/** Project ids in a view: union of Added (live), the picked PMs' projects (live), and individual picks — active projects only. */
+export async function resolveViewProjects(
+  admin: SupabaseClient,
+  profileId: string,
+  view: OverviewView,
+): Promise<{ id: string; initiated: boolean; pm_id: string | null }[]> {
+  const ids = new Set<string>(view.project_ids)
+  if (view.mine) {
+    const { data, error } = await admin.from('user_starred_projects').select('project_id').eq('profile_id', profileId)
+    if (error) throw new Error(error.message)
+    for (const r of data ?? []) ids.add(r.project_id as string)
   }
-  const { error: flagError } = await admin
-    .from('profiles')
-    .update({ overview_seeded: true })
-    .eq('id', profileId)
-  if (flagError) throw new Error(flagError.message)
-}
+  if (view.pm_ids.length > 0) {
+    const { data, error } = await admin.from('projects').select('id').in('pm_id', view.pm_ids).eq('is_active', true)
+    if (error) throw new Error(error.message)
+    for (const r of data ?? []) ids.add(r.id as string)
+  }
 
-export async function addOverviewProject(
-  admin: SupabaseClient,
-  profileId: string,
-  projectId: string,
-): Promise<void> {
-  const { error } = await admin
-    .from('user_overview_projects')
-    .upsert([{ user_id: profileId, project_id: projectId }], {
-      onConflict: 'user_id,project_id',
-      ignoreDuplicates: true,
-    })
-  if (error) throw new Error(error.message)
-}
-
-export async function removeOverviewProject(
-  admin: SupabaseClient,
-  profileId: string,
-  projectId: string,
-): Promise<void> {
-  const { error } = await admin
-    .from('user_overview_projects')
-    .delete()
-    .eq('user_id', profileId)
-    .eq('project_id', projectId)
-  if (error) throw new Error(error.message)
+  const all = [...ids]
+  const out: { id: string; initiated: boolean; pm_id: string | null }[] = []
+  for (let i = 0; i < all.length; i += 100) {
+    const { data, error } = await admin
+      .from('projects')
+      .select('id, initiated, pm_id')
+      .in('id', all.slice(i, i + 100))
+      .eq('is_active', true)
+    if (error) throw new Error(error.message)
+    out.push(...((data ?? []) as { id: string; initiated: boolean; pm_id: string | null }[]))
+  }
+  return out
 }
 
 const PROJECT_CHUNK = 20
 
 export async function getOverview(admin: SupabaseClient, profileId: string): Promise<OverviewData> {
-  await ensureSeeded(admin, profileId)
+  const view = await getOverviewView(admin, profileId)
+  const projects = await resolveViewProjects(admin, profileId, view)
+  if (projects.length === 0) return { view, columns: [], rows: [] }
+  const pmByProject = new Map(projects.map((p) => [p.id, p.pm_id]))
 
-  const { data: selected, error: selectedError } = await admin
-    .from('user_overview_projects')
-    .select('project_id')
-    .eq('user_id', profileId)
-  if (selectedError) throw new Error(selectedError.message)
-  const selectedProjectIds = (selected ?? []).map((r) => r.project_id as string)
-  if (selectedProjectIds.length === 0) return { columns: [], selectedProjectIds, rows: [] }
-
-  const { data: projects, error: projectsError } = await admin
-    .from('projects')
-    .select('id, initiated')
-    .in('id', selectedProjectIds)
-  if (projectsError) throw new Error(projectsError.message)
   const initiatedIds = (projects ?? []).filter((p) => p.initiated).map((p) => p.id as string)
   const uninitiatedIds = (projects ?? []).filter((p) => !p.initiated).map((p) => p.id as string)
   const shownIds = [...initiatedIds, ...uninitiatedIds]
@@ -152,7 +140,7 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
             .select('project_id, checklist_item_id, status, due_date')
             .in('project_id', chunk)
             .not('checklist_item_id', 'is', null)
-            .or(`source_category.eq.setup,status.neq.complete,due_date.gte.${today}`)
+            .or(`source_category.eq.setup,source_category.eq.closeout,status.neq.complete,due_date.gte.${today}`)
             .order('id') as never,
       )),
     )
@@ -178,13 +166,12 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
   const { data: items, error: itemsError } = await admin
     .from('checklist_items')
     .select('id, name, phase, sort_order, project_id')
-    .in('phase', ['setup', 'recurring'])
-    .order('phase', { ascending: false }) // 'setup' before 'recurring'
+    .in('phase', ['setup', 'recurring', 'closeout'])
     .order('sort_order')
   if (itemsError) throw new Error(itemsError.message)
 
-  const phaseByItem = new Map<string, 'setup' | 'recurring'>()
-  for (const item of items ?? []) phaseByItem.set(item.id as string, item.phase as 'setup' | 'recurring')
+  const phaseByItem = new Map<string, 'setup' | 'recurring' | 'closeout'>()
+  for (const item of items ?? []) phaseByItem.set(item.id as string, item.phase as 'setup' | 'recurring' | 'closeout')
 
   const byChain = new Map<string, InstanceRow[]>()
   const applicable = new Set<string>()
@@ -195,14 +182,25 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
     applicable.add(row.checklist_item_id)
   }
 
-  // A column exists only if some shown project actually has that item — so an item every
-  // shown project excluded, and other projects' custom items, add no empty columns.
+  // A Setup / Recurring column exists only if some shown project actually has that item — so an item
+  // every shown project excluded, and other projects' custom items, add no empty columns. The shared
+  // closeout items are always columns once any initiated project is shown (a project with no closeout
+  // task for one just gets the not-applicable box).
+  const PHASE_ORDER = { setup: 0, recurring: 1, closeout: 2 } as const
   const columns: OverviewColumn[] = (items ?? [])
-    .filter((item) => applicable.has(item.id as string))
+    .filter((item) => {
+      if (item.phase === 'closeout') return item.project_id === null && initiatedIds.length > 0
+      return applicable.has(item.id as string)
+    })
+    .sort(
+      (a, b) =>
+        PHASE_ORDER[a.phase as keyof typeof PHASE_ORDER] - PHASE_ORDER[b.phase as keyof typeof PHASE_ORDER] ||
+        (a.sort_order as number) - (b.sort_order as number),
+    )
     .map((item) => ({
       id: item.id as string,
       name: item.name as string,
-      phase: item.phase as 'setup' | 'recurring',
+      phase: item.phase as OverviewColumn['phase'],
     }))
 
   const flowReports = await getFlowReportsForMonth(admin, shownIds, defaultFlowReportMonth())
@@ -212,21 +210,25 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
 
   const rows = shownIds.map((projectId) => ({
     project_id: projectId,
+    pm_id: pmByProject.get(projectId) ?? null,
     initiated: !uninitiatedIds.includes(projectId),
     na: (uninitiatedIds.includes(projectId) ? [] : columns)
       .filter((col) => {
+        if (col.phase === 'closeout') return !byChain.has(`${projectId}|${col.id}`) // no closeout task for it
         const owner = ownerByItem.get(col.id)
-        // A custom item belongs to one project; a shared default can be excluded per project.
-        return owner ? owner !== projectId : excluded.has(`${projectId}|${col.id}`)
+        // A custom item belongs to one project (and can be dropped from it); a shared default can be excluded per project.
+        return owner
+          ? owner !== projectId || excluded.has(`${projectId}|${col.id}`)
+          : excluded.has(`${projectId}|${col.id}`)
       })
       .map((col) => col.id),
     done: columns
       .filter((col) => {
         const chain = byChain.get(`${projectId}|${col.id}`)
         if (!chain) return false // no task: not applicable to this project
-        return col.phase === 'setup'
-          ? chain.some((t) => t.status === 'complete')
-          : currentCycleComplete(chain, today)
+        return col.phase === 'recurring'
+          ? currentCycleComplete(chain, today)
+          : chain.some((t) => t.status === 'complete') // Setup and Closeout are one-time
       })
       .map((col) => col.id),
     flow: ((report) => ({
@@ -238,5 +240,5 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
     }))(flowByProject.get(projectId)),
   }))
 
-  return { columns, selectedProjectIds, rows }
+  return { view, columns, rows }
 }

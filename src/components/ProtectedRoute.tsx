@@ -9,6 +9,7 @@ import { FlowReportProvider } from '../contexts/FlowReportContext'
 import { AppReadyProvider } from '../contexts/AppReadyContext'
 import { ProcoreProvider } from '../contexts/ProcoreContext'
 import { AppShell } from './AppShell'
+import { RoleGate } from './RoleGate'
 
 /**
  * Gate for authenticated-only routes. Redirects to /login when there is no
@@ -48,9 +49,11 @@ export function ProtectedRoute() {
           <FlowReportProvider>
             <ProcoreProvider>
               <AppReadyProvider>
-                <AppShell>
-                  <Outlet />
-                </AppShell>
+                <RoleGate>
+                  <AppShell>
+                    <Outlet />
+                  </AppShell>
+                </RoleGate>
               </AppReadyProvider>
             </ProcoreProvider>
           </FlowReportProvider>

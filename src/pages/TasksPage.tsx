@@ -15,20 +15,25 @@ import {
   setMeetingDate,
   setTaskNotes,
   setTaskStatus,
+  updateTask,
   type NewTaskInput,
   type Task,
   type TaskStatus,
 } from '../lib/tasks'
 import type { Project } from '../lib/projects'
 import { AddTaskModal } from '../components/AddTaskModal'
+import { CloseoutProjectModal } from '../components/CloseoutProjectModal'
+import { EditProjectModal } from '../components/EditProjectModal'
+import { ProjectBubble } from '../components/ProjectBubble'
 import { InitiateProjectModal } from '../components/InitiateProjectModal'
+import { ProcoreEmptyState } from '../components/ProcoreEmptyState'
 import { NO_TASK_FILTERS, TaskFilters, type TaskFilterState } from '../components/TaskFilters'
 import { TaskTable } from '../components/TaskTable'
 
 /**
  * Landing tab under Organization: the pinned "Initiate Project" prompts for
- * Added-but-uninitiated projects (never affected by the filters), then the caller's
- * open tasks — by default only what's late or due within a week, with an
+ * Added-but-uninitiated projects (never affected by the filters), then the heading row
+ * (title + Add Task), the filters, and the caller's open tasks — by default only what's late or due within a week, with an
  * "Upcoming Tasks" button for the rest. Recurring tasks and each project's Setup
  * collapse into groups, and one computed "FLOW Reports (n)" row stands in for the
  * (no longer stored) flow tasks. Completed tasks live on the Archive.
@@ -37,7 +42,7 @@ const UPCOMING_KEY = 'legacy-pm:tasks:showUpcoming'
 export function TasksPage() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
-  const { projects, reloadProjects, addedVersion } = useProject()
+  const { projects, reloadProjects, addedVersion, selectedProject, selectProject } = useProject()
   const { profile, directory, nameFor } = useProfile()
   const { flowReports } = useFlowReport()
   const navigate = useNavigate()
@@ -76,7 +81,12 @@ export function TasksPage() {
     }
   }
   const [initiating, setInitiating] = useState<Project | null>(null)
+  // Everything pinned above the heading: the selected project's bubble, then the Initiate Project bubbles.
+  const pinned = selectedProject !== null || uninitiated.length > 0
   const [addTaskOpen, setAddTaskOpen] = useState(false)
+  const [editingTask, setEditingTask] = useState<Task | null>(null)
+  const [editingProject, setEditingProject] = useState(false)
+  const [closingProject, setClosingProject] = useState(false)
 
   // Only the newest request may write state, so a slow response to an old filter can't clobber a newer one.
   const requestId = useRef(0)
@@ -134,10 +144,18 @@ export function TasksPage() {
     setToast('Added to calendar')
   }
 
-  async function handleCreate(fields: NewTaskInput) {
-    if (!account) return
+  async function handleCreate(fields: NewTaskInput): Promise<boolean> {
+    if (!account) return false
     const task = await createTask(instance, account, fields)
     if (task) void loadTasks()
+    return task !== null
+  }
+
+  async function handleUpdate(task: Task, fields: NewTaskInput): Promise<boolean> {
+    if (!account) return false
+    const updated = await updateTask(instance, account, task.id, fields)
+    if (updated) void loadTasks() // the edit can move the row (new date, new assignee, new project)
+    return updated !== null
   }
 
   const filtered =
@@ -156,6 +174,11 @@ export function TasksPage() {
     return { count: owed.length, due: lastDayOfMonth(month) }
   }, [flowReports, filters, profile?.id])
 
+  // First run: nobody has Added a project and there's nothing to list. (A user with no Added projects
+  // who still has tasks, e.g. assigned by a teammate, keeps the normal list.)
+  const showSignInPrompt =
+    addedProjects.length === 0 && !filtered && !loading && !loadFailed && tasks.length === 0
+
   const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? null
   const { rows, upcomingCount } = useMemo(
     () =>
@@ -171,24 +194,18 @@ export function TasksPage() {
 
   return (
     <div className="w-full px-6 py-8">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-legacy-blue-dark">Tasks</h1>
-          <p className="mt-1 text-sm text-legacy-blue-light">
-            Everything open that's assigned to or by you.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAddTaskOpen(true)}
-          className="shrink-0 rounded-full border border-legacy-blue-light/30 px-3 py-1.5 text-xs font-medium text-legacy-blue-dark hover:border-legacy-blue-dark"
-        >
-          + Add Task
-        </button>
-      </div>
-
-      {uninitiated.length > 0 && (
-        <div className="mt-6 space-y-2">
+      {pinned && (
+        <div className="space-y-2">
+          {selectedProject && (
+            <ProjectBubble
+              project={selectedProject}
+              pmName={selectedProject.pm_id ? nameFor(selectedProject.pm_id) : null}
+              apmName={selectedProject.apm_id ? nameFor(selectedProject.apm_id) : null}
+              onEdit={() => setEditingProject(true)}
+              onCloseout={() => setClosingProject(true)}
+              onClear={() => selectProject(null)}
+            />
+          )}
           {uninitiated.map((project) => (
             <div
               key={project.id}
@@ -215,48 +232,71 @@ export function TasksPage() {
         </div>
       )}
 
-      <div className="mt-6">
-        <TaskFilters filters={filters} onChange={setFilters} projects={projects} directory={directory} />
+      <div className={`flex items-start justify-between gap-4 ${pinned ? 'mt-6' : ''}`}>
+        <div>
+          <h1 className="text-xl font-semibold text-legacy-blue-dark">Tasks</h1>
+          <p className="mt-1 text-sm text-legacy-blue-light">
+            Everything open that's assigned to or by you.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAddTaskOpen(true)}
+          className="shrink-0 rounded-full border border-legacy-blue-light/30 px-3 py-1.5 text-xs font-medium text-legacy-blue-dark hover:border-legacy-blue-dark"
+        >
+          + Add Task
+        </button>
       </div>
 
-      <div className="mt-4">
-        <TaskTable
-          rows={rows}
-          mode="open"
-          loading={loading}
-          error={loadFailed}
-          onRetry={() => void loadTasks()}
-          emptyMessage={
-            filtered
-              ? showUpcoming
-                ? 'No open tasks match these filters.'
-                : 'Nothing late or due in the next 7 days matches these filters.'
-              : addedProjects.length === 0
-                ? 'No tasks yet. Add a project from the sidebar to get started.'
-                : showUpcoming || upcomingCount === 0
-                  ? 'Nothing open right now.'
-                  : 'Nothing late or due in the next 7 days.'
-          }
-          footer={
-            <button
-              type="button"
-              onClick={toggleUpcoming}
-              aria-expanded={showUpcoming}
-              className="text-sm font-medium text-legacy-blue-dark underline-offset-2 hover:underline"
-            >
-              {showUpcoming ? 'Hide Upcoming Tasks' : 'Upcoming Tasks'}
-            </button>
-          }
-          currentProfileId={profile?.id ?? null}
-          projectName={projectName}
-          nameFor={nameFor}
-          onStatus={(task, status) => void handleStatus(task, status)}
-          onDelete={(task) => void handleDelete(task)}
-          onOpenFlowTab={() => navigate('/organization/flow')}
-          onSaveNotes={handleSaveNotes}
-          onMeetingDate={(task, date) => void handleMeetingDate(task, date)}
-        />
-      </div>
+      {showSignInPrompt ? (
+        <ProcoreEmptyState />
+      ) : (
+        <>
+          <div className="mt-6">
+            <TaskFilters filters={filters} onChange={setFilters} projects={projects} directory={directory} />
+          </div>
+
+          <div className="mt-4">
+            <TaskTable
+              rows={rows}
+              mode="open"
+              loading={loading}
+              error={loadFailed}
+              onRetry={() => void loadTasks()}
+              emptyMessage={
+                filtered
+                  ? showUpcoming
+                    ? 'No open tasks match these filters.'
+                    : 'Nothing late or due in the next 7 days matches these filters.'
+                  : addedProjects.length === 0
+                    ? 'No tasks yet. Add a project from the sidebar to get started.'
+                    : showUpcoming || upcomingCount === 0
+                      ? 'Nothing open right now.'
+                      : 'Nothing late or due in the next 7 days.'
+              }
+              footer={
+                <button
+                  type="button"
+                  onClick={toggleUpcoming}
+                  aria-expanded={showUpcoming}
+                  className="text-sm font-medium text-legacy-blue-dark underline-offset-2 hover:underline"
+                >
+                  {showUpcoming ? 'Hide Upcoming Tasks' : 'Upcoming Tasks'}
+                </button>
+              }
+              currentProfileId={profile?.id ?? null}
+              projectName={projectName}
+              nameFor={nameFor}
+              onStatus={(task, status) => void handleStatus(task, status)}
+              onDelete={(task) => void handleDelete(task)}
+              onEdit={setEditingTask}
+              onOpenFlowTab={() => navigate('/organization/flow')}
+              onSaveNotes={handleSaveNotes}
+              onMeetingDate={(task, date) => void handleMeetingDate(task, date)}
+            />
+          </div>
+        </>
+      )}
 
       <div className="mt-6 text-sm">
         <Link
@@ -290,6 +330,29 @@ export function TasksPage() {
         />
       )}
 
+      {editingProject && selectedProject && (
+        <EditProjectModal
+          project={selectedProject}
+          onClose={() => setEditingProject(false)}
+          onDone={() => {
+            // PM/APM and the open tasks' assignees changed: refresh both.
+            void reloadProjects()
+            void loadTasks()
+          }}
+        />
+      )}
+
+      {closingProject && selectedProject && (
+        <CloseoutProjectModal
+          project={selectedProject}
+          onClose={() => setClosingProject(false)}
+          onDone={() => {
+            void reloadProjects() // status is now 'closing'
+            void loadTasks() // new closeout tasks; recurring ones may be gone
+          }}
+        />
+      )}
+
       {addTaskOpen && (
         <AddTaskModal
           presetProjectId={null}
@@ -297,7 +360,19 @@ export function TasksPage() {
           directory={directory}
           currentProfileId={profile?.id ?? null}
           onClose={() => setAddTaskOpen(false)}
-          onCreate={handleCreate}
+          onSave={handleCreate}
+        />
+      )}
+
+      {editingTask && (
+        <AddTaskModal
+          presetProjectId={null}
+          projects={projects}
+          directory={directory}
+          currentProfileId={profile?.id ?? null}
+          editing={editingTask}
+          onClose={() => setEditingTask(null)}
+          onSave={(fields) => handleUpdate(editingTask, fields)}
         />
       )}
     </div>

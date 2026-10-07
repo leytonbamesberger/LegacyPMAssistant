@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { useProject } from '../contexts/ProjectContext'
 import { useFlowReport } from '../contexts/FlowReportContext'
 import { FlowReportsSection } from '../components/FlowReportsSection'
+import { ProcoreEmptyState } from '../components/ProcoreEmptyState'
 
 /**
  * FLOW tab: the Flow Reports list (one row per Added project's current-period
@@ -33,9 +34,7 @@ export function FlowPage() {
 
       <div className="mt-6">
         {addedProjects.length === 0 ? (
-          <p className="text-sm text-legacy-blue-light">
-            No added projects yet. Add a project from the sidebar to see its flow report here.
-          </p>
+          <ProcoreEmptyState />
         ) : loading && flowReports.length === 0 ? (
           <p className="text-sm text-legacy-blue-light">Loading…</p>
         ) : (

@@ -25,7 +25,6 @@ export interface SetupSelection extends ItemRef {
 
 export interface RecurringSelection extends ItemRef {
   startDate: string | null
-  timeOfDay: string | null
   cadenceValue: number | null
   cadenceUnit: CadenceUnit | null
 }
@@ -39,14 +38,13 @@ export interface InitiationPayload {
 }
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
-const TIME_OF_DAY = /^\d{2}:\d{2}(:\d{2})?$/
 const CADENCE_UNITS: readonly string[] = ['day', 'week', 'month']
 
-function asString(value: unknown): string | null {
+export function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function parseItemRef(raw: Record<string, unknown>, where: string): ItemRef {
+export function parseItemRef(raw: Record<string, unknown>, where: string): ItemRef {
   const itemId = asString(raw.itemId)
   const newName = asString(raw.newName)
   if (!itemId && !newName) throw new InitiationError(`${where}: each item needs an "itemId" or a "newName"`)
@@ -54,12 +52,47 @@ function parseItemRef(raw: Record<string, unknown>, where: string): ItemRef {
   return { itemId, newName }
 }
 
-function parseDate(value: unknown, where: string): string | null {
+export function parseDate(value: unknown, where: string): string | null {
   if (value === null || value === undefined || value === '') return null
   if (typeof value !== 'string' || !ISO_DATE.test(value)) {
     throw new InitiationError(`${where}: dates must be YYYY-MM-DD`)
   }
   return value
+}
+
+/** Shape-checks a request's Setup selections (a wizard or Edit Project body). */
+export function parseSetupSelections(rows: unknown[]): SetupSelection[] {
+  return (rows as Record<string, unknown>[]).map((row, i): SetupSelection => {
+    const where = `setup[${i}]`
+    return {
+      ...parseItemRef(row, where),
+      isComplete: row.isComplete === true,
+      dueDate: parseDate(row.dueDate, where),
+      meetingDate: parseDate(row.meetingDate, where),
+      isTbd: row.isTbd === true,
+    }
+  })
+}
+
+/** Shape-checks a request's Recurring selections. */
+export function parseRecurringSelections(rows: unknown[]): RecurringSelection[] {
+  return (rows as Record<string, unknown>[]).map((row, i): RecurringSelection => {
+    const where = `recurring[${i}]`
+    const cadenceValue = typeof row.cadenceValue === 'number' ? row.cadenceValue : null
+    if (cadenceValue !== null && (!Number.isInteger(cadenceValue) || cadenceValue <= 0)) {
+      throw new InitiationError(`${where}: "cadenceValue" must be a positive whole number`)
+    }
+    const cadenceUnit = asString(row.cadenceUnit)
+    if (cadenceUnit && !CADENCE_UNITS.includes(cadenceUnit)) {
+      throw new InitiationError(`${where}: "cadenceUnit" must be day, week, or month`)
+    }
+    return {
+      ...parseItemRef(row, where),
+      startDate: parseDate(row.startDate, where),
+      cadenceValue,
+      cadenceUnit: cadenceUnit as CadenceUnit | null,
+    }
+  })
 }
 
 /** Shape-checks the untrusted request body; rule checks that need the catalog happen in initiateProject. */
@@ -77,37 +110,8 @@ export function parseInitiationPayload(body: unknown): InitiationPayload {
     }
   }
 
-  const setup = (raw.setup as Record<string, unknown>[]).map((row, i): SetupSelection => {
-    const where = `setup[${i}]`
-    return {
-      ...parseItemRef(row, where),
-      isComplete: row.isComplete === true,
-      dueDate: parseDate(row.dueDate, where),
-      meetingDate: parseDate(row.meetingDate, where),
-      isTbd: row.isTbd === true,
-    }
-  })
-
-  const recurring = (raw.recurring as Record<string, unknown>[]).map((row, i): RecurringSelection => {
-    const where = `recurring[${i}]`
-    const timeOfDay = asString(row.timeOfDay)
-    if (timeOfDay && !TIME_OF_DAY.test(timeOfDay)) throw new InitiationError(`${where}: "timeOfDay" must be HH:MM`)
-    const cadenceValue = typeof row.cadenceValue === 'number' ? row.cadenceValue : null
-    if (cadenceValue !== null && (!Number.isInteger(cadenceValue) || cadenceValue <= 0)) {
-      throw new InitiationError(`${where}: "cadenceValue" must be a positive whole number`)
-    }
-    const cadenceUnit = asString(row.cadenceUnit)
-    if (cadenceUnit && !CADENCE_UNITS.includes(cadenceUnit)) {
-      throw new InitiationError(`${where}: "cadenceUnit" must be day, week, or month`)
-    }
-    return {
-      ...parseItemRef(row, where),
-      startDate: parseDate(row.startDate, where),
-      timeOfDay,
-      cadenceValue,
-      cadenceUnit: cadenceUnit as CadenceUnit | null,
-    }
-  })
+  const setup = parseSetupSelections(raw.setup)
+  const recurring = parseRecurringSelections(raw.recurring)
 
   return {
     projectId,
@@ -118,14 +122,14 @@ export function parseInitiationPayload(body: unknown): InitiationPayload {
   }
 }
 
-interface ResolvedItem {
+export interface ResolvedItem {
   id: string | null // null until a new custom item is inserted
   name: string
   /** Meeting items (checklist_items.is_meeting) may be left TBD. */
   isMeeting: boolean
 }
 
-function resolveItems(
+export function resolveItems(
   refs: ItemRef[],
   phase: 'setup' | 'recurring',
   catalog: Map<string, ChecklistItemRecord>,
@@ -146,6 +150,132 @@ function resolveItems(
 function nextSortOrder(existing: ChecklistItemRecord[], phase: 'setup' | 'recurring'): () => number {
   let max = Math.max(100, ...existing.filter((i) => i.project_id && i.phase === phase).map((i) => i.sort_order))
   return () => ++max
+}
+
+/** The wizard's Setup rules (see the step 2 notes in InitiateProjectModal); throws an InitiationError naming the item. */
+export function checkSetupSelections(items: ResolvedItem[], selections: SetupSelection[]): void {
+  selections.forEach((sel, i) => {
+    const item = items[i]
+    if (item.isMeeting) {
+      // A meeting needs ONE of: a meeting date, TBD, or Done. A date completes it.
+      if (sel.isTbd && sel.meetingDate) {
+        throw new InitiationError(`"${item.name}": TBD and a meeting date can't both be set`)
+      }
+      const complete = sel.isComplete || !!sel.meetingDate
+      if (!complete && !sel.isTbd) {
+        throw new InitiationError(`"${item.name}" needs a meeting date, TBD, or to be marked done`)
+      }
+      // Still open (TBD) -> it carries the setup due date like every other open setup item.
+      if (!complete && !sel.dueDate) {
+        throw new InitiationError(`"${item.name}" needs the setup due date ("Setup complete by")`)
+      }
+    } else {
+      if (sel.isTbd) {
+        throw new InitiationError(`"${item.name}" needs a due date or to be marked done — only meeting items can be TBD`)
+      }
+      if (sel.meetingDate) {
+        throw new InitiationError(`"${item.name}": only meeting items have a meeting date`)
+      }
+      // An item already Done needs no date; anything else must say when it's due.
+      if (!sel.dueDate && !sel.isComplete) {
+        throw new InitiationError(`"${item.name}" needs a due date or to be marked done`)
+      }
+    }
+  })
+}
+
+export function checkRecurringSelections(items: ResolvedItem[], selections: RecurringSelection[]): void {
+  selections.forEach((sel, i) => {
+    if (!sel.startDate || !sel.cadenceValue || !sel.cadenceUnit) {
+      throw new InitiationError(`"${items[i].name}" needs a start date and a cadence`)
+    }
+  })
+}
+
+/**
+ * The project_checklist_item_config row + task row for each chosen item — what initiation writes for the
+ * whole checklist, and what Edit Project writes for items added later. Every config row carries every
+ * column: supabase-js turns a bulk insert's missing keys into explicit NULLs (not column defaults), so a
+ * row that omitted `is_tbd` would violate its NOT NULL.
+ */
+export function buildChecklistRows(args: {
+  projectId: string
+  actingProfileId: string
+  assigneeIds: string[]
+  setup: { item: ResolvedItem & { id: string }; sel: SetupSelection }[]
+  recurring: { item: ResolvedItem & { id: string }; sel: RecurringSelection }[]
+}): { configRows: Record<string, unknown>[]; tasks: InsertTaskInput[] } {
+  const { projectId } = args
+  const taskBase = {
+    type: 'project' as const,
+    projectId,
+    assignedBy: args.actingProfileId,
+    assigneeIds: args.assigneeIds,
+    visibility: 'public' as const,
+  }
+  const configRow = (
+    checklistItemId: string,
+    fields: Partial<{
+      due_date: string | null
+      is_tbd: boolean
+      cadence_value: number | null
+      cadence_unit: string | null
+      start_date: string | null
+    }>,
+  ) => ({
+    project_id: projectId,
+    checklist_item_id: checklistItemId,
+    due_date: null,
+    is_tbd: false,
+    cadence_value: null,
+    cadence_unit: null,
+    start_date: null,
+    ...fields,
+  })
+  const configRows: ReturnType<typeof configRow>[] = []
+  const tasks: InsertTaskInput[] = []
+
+  for (const { item, sel } of args.setup) {
+    // Every setup task, meetings included, is due on the project's "Setup complete by" date (null when
+    // that was left blank because everything is complete). A meeting date is separate and completes it.
+    const meetingDate = item.isMeeting ? sel.meetingDate : null
+    const complete = sel.isComplete || meetingDate !== null
+    // A TBD meeting is open with no date; it's recorded on the config row (tasks.is_tbd stays false so
+    // the Tasks page shows the setup due date, not "TBD").
+    const meetingTbd = item.isMeeting && sel.isTbd && !complete
+    configRows.push(configRow(item.id, { due_date: sel.dueDate, is_tbd: meetingTbd }))
+    tasks.push({
+      ...taskBase,
+      title: item.name,
+      dueDate: sel.dueDate,
+      meetingDate,
+      status: complete ? 'complete' : 'not_started',
+      checklistItemId: item.id,
+      sourceCategory: 'setup',
+    })
+  }
+
+  for (const { item, sel } of args.recurring) {
+    configRows.push(
+      configRow(item.id, {
+        due_date: sel.startDate,
+        start_date: sel.startDate,
+        cadence_value: sel.cadenceValue,
+        cadence_unit: sel.cadenceUnit,
+      }),
+    )
+    tasks.push({
+      ...taskBase,
+      title: item.name,
+      dueDate: sel.startDate,
+      isRecurring: true,
+      cadenceValue: sel.cadenceValue,
+      cadenceUnit: sel.cadenceUnit,
+      checklistItemId: item.id,
+      sourceCategory: 'recurring',
+    })
+  }
+  return { configRows, tasks }
 }
 
 /**
@@ -189,40 +319,8 @@ export async function initiateProject(
   const setupItems = resolveItems(payload.setup, 'setup', catalog)
   const recurringItems = resolveItems(payload.recurring, 'recurring', catalog)
 
-  payload.setup.forEach((sel, i) => {
-    const item = setupItems[i]
-    if (item.isMeeting) {
-      // A meeting needs ONE of: a meeting date, TBD, or Done. A date completes it.
-      if (sel.isTbd && sel.meetingDate) {
-        throw new InitiationError(`"${item.name}": TBD and a meeting date can't both be set`)
-      }
-      const complete = sel.isComplete || !!sel.meetingDate
-      if (!complete && !sel.isTbd) {
-        throw new InitiationError(`"${item.name}" needs a meeting date, TBD, or to be marked done`)
-      }
-      // Still open (TBD) -> it carries the setup due date like every other open setup item.
-      if (!complete && !sel.dueDate) {
-        throw new InitiationError(`"${item.name}" needs the setup due date ("Setup complete by")`)
-      }
-    } else {
-      if (sel.isTbd) {
-        throw new InitiationError(`"${item.name}" needs a due date or to be marked done — only meeting items can be TBD`)
-      }
-      if (sel.meetingDate) {
-        throw new InitiationError(`"${item.name}": only meeting items have a meeting date`)
-      }
-      // An item already Done needs no date; anything else must say when it's due.
-      if (!sel.dueDate && !sel.isComplete) {
-        throw new InitiationError(`"${item.name}" needs a due date or to be marked done`)
-      }
-    }
-  })
-  payload.recurring.forEach((sel, i) => {
-    const item = recurringItems[i]
-    if (!sel.startDate || !sel.cadenceValue || !sel.cadenceUnit) {
-      throw new InitiationError(`"${item.name}" needs a start date and a cadence`)
-    }
-  })
+  checkSetupSelections(setupItems, payload.setup)
+  checkRecurringSelections(recurringItems, payload.recurring)
 
   // ---- write ----
   const assigneeIds = [payload.pmId, payload.apmId].filter((id): id is string => !!id)
@@ -302,82 +400,12 @@ export async function initiateProject(
   }
 
   // 5. Config rows + one task per included item.
-  const taskBase = {
-    type: 'project' as const,
+  const { configRows, tasks } = buildChecklistRows({
     projectId,
-    assignedBy: actingProfileId,
+    actingProfileId,
     assigneeIds,
-    visibility: 'public' as const,
-  }
-  // Every row carries every column. supabase-js turns a bulk insert's missing keys into explicit
-  // NULLs (not column defaults), so a row that omitted `is_tbd` would violate its NOT NULL.
-  const configRow = (
-    checklistItemId: string,
-    fields: Partial<{
-      due_date: string | null
-      is_tbd: boolean
-      cadence_value: number | null
-      cadence_unit: string | null
-      start_date: string | null
-      time_of_day: string | null
-    }>,
-  ) => ({
-    project_id: projectId,
-    checklist_item_id: checklistItemId,
-    due_date: null,
-    is_tbd: false,
-    cadence_value: null,
-    cadence_unit: null,
-    start_date: null,
-    time_of_day: null,
-    ...fields,
-  })
-  const configRows: ReturnType<typeof configRow>[] = []
-  const tasks: InsertTaskInput[] = []
-
-  payload.setup.forEach((sel, i) => {
-    const item = setupItems[i]
-    // Every setup task, meetings included, is due on the project's "Setup complete by" date (null when
-    // that was left blank because everything is complete). A meeting date is separate and completes it.
-    const meetingDate = item.isMeeting ? sel.meetingDate : null
-    const complete = sel.isComplete || meetingDate !== null
-    // A TBD meeting is open with no date; it's recorded on the config row (tasks.is_tbd stays false so
-    // the Tasks page shows the setup due date, not "TBD").
-    const meetingTbd = item.isMeeting && sel.isTbd && !complete
-    configRows.push(configRow(item.id as string, { due_date: sel.dueDate, is_tbd: meetingTbd }))
-    tasks.push({
-      ...taskBase,
-      title: item.name,
-      dueDate: sel.dueDate,
-      meetingDate,
-      status: complete ? 'complete' : 'not_started',
-      checklistItemId: item.id,
-      sourceCategory: 'setup',
-    })
-  })
-
-  payload.recurring.forEach((sel, i) => {
-    const item = recurringItems[i]
-    configRows.push(
-      configRow(item.id as string, {
-        due_date: sel.startDate,
-        start_date: sel.startDate,
-        time_of_day: sel.timeOfDay,
-        cadence_value: sel.cadenceValue,
-        cadence_unit: sel.cadenceUnit,
-      }),
-    )
-    tasks.push({
-      ...taskBase,
-      title: item.name,
-      dueDate: sel.startDate,
-      dueTime: sel.timeOfDay,
-      isRecurring: true,
-      cadenceValue: sel.cadenceValue,
-      cadenceUnit: sel.cadenceUnit,
-      checklistItemId: item.id,
-      sourceCategory: 'recurring',
-    })
+    setup: payload.setup.map((sel, i) => ({ item: setupItems[i] as ResolvedItem & { id: string }, sel })),
+    recurring: payload.recurring.map((sel, i) => ({ item: recurringItems[i] as ResolvedItem & { id: string }, sel })),
   })
 
   if (configRows.length > 0) {

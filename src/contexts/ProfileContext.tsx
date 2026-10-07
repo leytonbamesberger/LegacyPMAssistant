@@ -19,7 +19,8 @@ interface ProfileContextValue {
   error: boolean
   /** Re-runs the initial profile + directory load. */
   reload: () => Promise<void>
-  setTitle: (title: 'pm' | 'apm') => Promise<void>
+  /** Saves the caller's role; false if it couldn't be saved. */
+  setTitle: (title: 'pm' | 'apm') => Promise<boolean>
   /** display_name for any profile id, falling back to something non-blank. */
   nameFor: (profileId: string | null) => string
 }
@@ -60,14 +61,12 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   const setTitle = useCallback(
     async (title: 'pm' | 'apm') => {
-      if (!account) return
+      if (!account) return false
       const updated = await updateProfileTitle(instance, account, title)
-      if (updated) {
-        setProfile(updated)
-        setDirectory((prev) =>
-          prev.map((p) => (p.id === updated.id ? { ...p, title: updated.title } : p)),
-        )
-      }
+      if (!updated) return false
+      setProfile(updated)
+      setDirectory((prev) => prev.map((p) => (p.id === updated.id ? { ...p, title: updated.title } : p)))
+      return true
     },
     [instance, account],
   )

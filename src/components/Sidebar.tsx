@@ -7,9 +7,9 @@ import { AddProjectIcon, ChevronIcon, RefreshIcon, SearchIcon } from './icons'
 const COLLAPSED_KEY = 'legacy-pm:sidebarCollapsed'
 const MAX_SEARCH_RESULTS = 25
 
-// Auto-collapse the sidebar after picking a project — flip this to `false`
-// if you'd rather it stay open.
-const COLLAPSE_ON_SELECT = true
+// Auto-collapse the sidebar after picking a project. Off now that a selection is shown (highlighted
+// row + the project bubble on Tasks) and cleared from this list — flip it back to `true` to restore.
+const COLLAPSE_ON_SELECT = false
 
 function readCollapsed(): boolean {
   try {
@@ -67,7 +67,12 @@ export function Sidebar() {
     [projects],
   )
 
+  // Clicking the selected project again clears the selection; any other click selects it (never toggles Add).
   function handleSelect(project: Project) {
+    if (project.id === selectedProject?.id) {
+      selectProject(null)
+      return
+    }
     selectProject(project)
     if (COLLAPSE_ON_SELECT) setCollapsedPersisted(true)
   }
@@ -145,6 +150,7 @@ export function Sidebar() {
               projects={searchResults}
               selectedId={selectedProject?.id ?? null}
               onSelect={handleSelect}
+              onClear={() => selectProject(null)}
               onToggleStar={toggleStar}
             />
           ) : (
@@ -157,6 +163,7 @@ export function Sidebar() {
             projects={addedProjects}
             selectedId={selectedProject?.id ?? null}
             onSelect={handleSelect}
+            onClear={() => selectProject(null)}
             onToggleStar={toggleStar}
           />
         ) : (
@@ -173,11 +180,13 @@ function ProjectList({
   projects,
   selectedId,
   onSelect,
+  onClear,
   onToggleStar,
 }: {
   projects: Project[]
   selectedId: string | null
   onSelect: (project: Project) => void
+  onClear: () => void
   onToggleStar: (project: Project) => void
 }) {
   return (
@@ -188,6 +197,7 @@ function ProjectList({
           project={project}
           active={project.id === selectedId}
           onSelect={() => onSelect(project)}
+          onClear={onClear}
           onToggleStar={() => onToggleStar(project)}
         />
       ))}
@@ -199,11 +209,13 @@ function ProjectRow({
   project,
   active,
   onSelect,
+  onClear,
   onToggleStar,
 }: {
   project: Project
   active: boolean
   onSelect: () => void
+  onClear: () => void
   onToggleStar: () => void
 }) {
   return (
@@ -217,6 +229,8 @@ function ProjectRow({
       <button
         type="button"
         onClick={onSelect}
+        aria-pressed={active}
+        title={active ? 'Selected — click again to clear' : 'Select project'}
         className="min-w-0 flex-1 px-2 py-1.5 text-left"
       >
         <div className="truncate font-medium">{project.name}</div>
@@ -230,6 +244,20 @@ function ProjectRow({
           </div>
         )}
       </button>
+      {active && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation()
+            onClear()
+          }}
+          title="Clear selection"
+          aria-label={`Clear selection of ${project.name}`}
+          className="shrink-0 px-1 py-1.5 text-base leading-none text-white/80 hover:text-white"
+        >
+          ×
+        </button>
+      )}
       <button
         type="button"
         onClick={(e) => {

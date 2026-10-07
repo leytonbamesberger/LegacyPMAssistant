@@ -17,6 +17,7 @@ export const NO_TASK_FILTERS: TaskFilterState = { projectId: null, assigneeId: n
 const CATEGORY_OPTIONS: { value: TaskSourceCategory; label: string }[] = [
   { value: 'setup', label: 'Setup' },
   { value: 'recurring', label: 'Recurring' },
+  { value: 'closeout', label: 'Closeout' },
   { value: 'flow', label: 'FLOW' },
 ]
 

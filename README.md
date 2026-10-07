@@ -112,7 +112,12 @@ Microsoft-token requests through our own `/api` routes," not as an RLS policy.)
 [`004_submittal_checker.sql`](supabase/migrations/004_submittal_checker.sql),
 [`005_reset_initiation_budget_into_flow_reports.sql`](supabase/migrations/005_reset_initiation_budget_into_flow_reports.sql)
 (idempotent — safe to re-run),
-[`006_task_meeting_date.sql`](supabase/migrations/006_task_meeting_date.sql).
+[`006_task_meeting_date.sql`](supabase/migrations/006_task_meeting_date.sql),
+[`007_backfill_manual_task_due_dates.sql`](supabase/migrations/007_backfill_manual_task_due_dates.sql)
+(data only — gives open manual tasks with no due date today's date; no schema change),
+[`008_overview_view_and_closeout.sql`](supabase/migrations/008_overview_view_and_closeout.sql)
+(idempotent — adds `profiles.overview_view`, allows `closeout` tasks; its last step, dropping
+`user_overview_projects`, is commented out for you to run after deploying).
 
 `schema.sql` is a clean snapshot of the live database for a **fresh** project; it is
 not a history and must not be re-run against live data.
@@ -326,14 +331,15 @@ api/                   thin Vercel adapters (12 of 12 files — Hobby plan caps 
     authorize.ts  callback.ts  status.ts  disconnect.ts
   projects/
     index.ts (GET /api/projects, or ?initiationCatalogFor=<id> for the wizard's
-              checklist, or ?overview=1 for the Overview grid; POST dispatches on
+              checklist, ?overview=1 for the Overview grid, or ?editCatalogFor=<id>
+              for the Edit / Closeout Project modals; POST dispatches on
               body.action: 'sync' | 'star' | 'update' | 'initiate' |
-              'overview-add' | 'overview-remove')
+              'edit-project' | 'closeout' | 'overview-view')
   flow-reports.ts (GET this month's status; POST dispatches on body.action:
                    'save' | 'submit')
   tasks.ts (GET tasks visible to caller, filtered by projectId/assigneeId/
             categories and status=open|complete — complete is paginated;
-            POST dispatches on body.action: 'create' | 'set-status' | 'delete')
+            POST dispatches on body.action: 'create' | 'update' | 'set-status' | ...)
   specs/
     index.ts (GET + POST /api/specs)
   submittals/
@@ -351,11 +357,13 @@ server/                framework-agnostic handlers + logic
   procoreApi.ts        generic Procore REST GET (companies, projects, specs)
   projects.ts          sync/list/star/update logic for the project cache
   projectRoutes.ts     the /api/projects handlers (list, and the sync/star/
-                       update/initiate/overview-* actions dispatched from
-                       handleProjectsPost)
-  overview.ts          the Overview grid: per-user project selection (seeded once
-                       from Added, then independent), and which checklist cells
-                       show a check — read off `tasks`
+                       update/initiate/edit-project/closeout/overview-view actions
+                       dispatched from handleProjectsPost)
+  overview.ts          the Overview grid: the per-user "Choose a View" selection
+                       (profiles.overview_view: Added / PMs / picked projects) and
+                       which checklist + closeout cells show a check — read off `tasks`
+  projectEdit.ts       Edit Project (PM/APM, add/remove Setup + Recurring items) and
+                       Closeout Project (closeout tasks, stop recurring, status 'closing')
   selectAll.ts         .range() paging helper — PostgREST silently truncates any
                        response at 1000 rows, and task history outgrows that
   checklist.ts         the checklist CATALOG for the initiation wizard

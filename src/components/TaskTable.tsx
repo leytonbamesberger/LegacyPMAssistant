@@ -1,16 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { localToday } from '../lib/dates'
+import { PencilIcon } from './icons'
 import type { TaskListRow } from '../lib/taskRows'
 import { TASK_STATUS_LABEL, type Task, type TaskStatus } from '../lib/tasks'
 
 const STATUSES: TaskStatus[] = ['not_started', 'in_progress', 'complete']
-const CATEGORY_LABEL = { setup: 'Setup', recurring: 'Recurring', flow: 'FLOW' } as const
+const CATEGORY_LABEL = { setup: 'Setup', recurring: 'Recurring', closeout: 'Closeout', flow: 'FLOW' } as const
 
 const OPEN_COLUMNS =
-  'grid-cols-[7.5rem_minmax(12rem,2.2fr)_minmax(8rem,1.2fr)_minmax(7rem,1fr)_minmax(6rem,0.8fr)_5.5rem_6.5rem_minmax(8rem,1.4fr)_1.25rem]'
+  'grid-cols-[7.5rem_minmax(12rem,2.2fr)_minmax(8rem,1.2fr)_minmax(7rem,1fr)_minmax(6rem,0.8fr)_5.5rem_6.5rem_minmax(8rem,1.4fr)_2.75rem]'
 const ARCHIVE_COLUMNS =
-  'grid-cols-[7.5rem_minmax(12rem,2.2fr)_minmax(8rem,1.2fr)_minmax(7rem,1fr)_minmax(6rem,0.8fr)_5.5rem_5.5rem_6.5rem_minmax(8rem,1.4fr)]'
+  'grid-cols-[7.5rem_minmax(12rem,2.2fr)_minmax(8rem,1.2fr)_minmax(7rem,1fr)_minmax(6rem,0.8fr)_5.5rem_5.5rem_6.5rem_minmax(8rem,1.4fr)_2.75rem]'
 
 /**
  * Full-width task rows (not cards) shared by the Tasks and Archive pages. On the Tasks
@@ -30,6 +31,7 @@ export function TaskTable({
   nameFor,
   onStatus,
   onDelete,
+  onEdit,
   onOpenFlowTab,
   onSaveNotes,
   onMeetingDate,
@@ -48,6 +50,8 @@ export function TaskTable({
   nameFor: (profileId: string) => string
   onStatus: (task: Task, status: TaskStatus) => void
   onDelete?: (task: Task) => void
+  /** Opens a manual task (no source_category) in the Add Task form's edit mode. */
+  onEdit?: (task: Task) => void
   /** Clicking the computed FLOW row goes to the FLOW tab. */
   onOpenFlowTab?: () => void
   /** Persists a task's notes (null clears them). Offered on every task row, generated ones included. */
@@ -78,6 +82,7 @@ export function TaskTable({
           'Completed',
           'Repeats',
           'Notes',
+          '',
         ]
 
   function toggleGroup(id: string) {
@@ -179,20 +184,30 @@ export function TaskTable({
               {task.notes || '+ Add note'}
             </button>
           </div>
-          {mode === 'open' && (
-            <div>
-              {!generated && onDelete && (
-                <button
-                  type="button"
-                  onClick={() => onDelete(task)}
-                  title="Delete task"
-                  className="text-legacy-blue-light hover:text-legacy-red"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          )}
+          <div className="flex items-start gap-1.5">
+            {!generated && onEdit && (
+              <button
+                type="button"
+                onClick={() => onEdit(task)}
+                title="Edit task"
+                aria-label={`Edit ${task.title}`}
+                className="text-legacy-blue-light hover:text-legacy-blue-dark"
+              >
+                <PencilIcon width={14} height={14} />
+              </button>
+            )}
+            {!generated && onDelete && (
+              <button
+                type="button"
+                onClick={() => onDelete(task)}
+                title="Delete task"
+                aria-label={`Delete ${task.title}`}
+                className="leading-none text-legacy-blue-light hover:text-legacy-red"
+              >
+                ×
+              </button>
+            )}
+          </div>
         </div>
         {editingId === task.id && (
           <NotesEditor

@@ -6,10 +6,13 @@ import {
   deleteTask,
   getMeetingDatedTasks,
   getTasksForProfile,
+  isRealDate,
   setMeetingDate,
   setTaskNotes,
   setTaskStatus,
   TaskRuleError,
+  updateTask,
+  type NewTaskFields,
   type TaskSourceCategory,
 } from './tasks.js'
 import type { CadenceUnit } from '../shared/period.js'
@@ -27,13 +30,13 @@ export interface TasksListQuery {
   assigneeId?: string
   /** 'open' (default), 'complete', or 'meeting' (every task with a meeting date, for the calendar). */
   status?: string
-  /** Comma-separated source categories: setup,recurring,flow. */
+  /** Comma-separated source categories: setup,recurring,closeout,flow. */
   categories?: string
   page?: string
   pageSize?: string
 }
 
-const SOURCE_CATEGORIES = ['setup', 'recurring', 'flow'] as const
+const SOURCE_CATEGORIES = ['setup', 'recurring', 'closeout', 'flow'] as const
 
 function positiveInt(raw: string | undefined): number | undefined {
   const n = Number(raw)
@@ -97,14 +100,12 @@ const TASK_VISIBILITIES = ['private', 'public'] as const
 const CADENCE_UNITS = ['day', 'week', 'month'] as const
 const TASK_STATUSES = ['not_started', 'in_progress', 'complete'] as const
 
-/** The 'create' action of POST /api/tasks. */
-async function handleTasksCreate(
-  authorizationHeader: string | undefined,
-  body: unknown,
-): Promise<ApiResult> {
-  const resolved = await resolveProfile(authorizationHeader)
-  if ('error' in resolved) return resolved.error
-
+/**
+ * Validates the Add / Edit Task form body into NewTaskFields (or the 400 to return). The two actions
+ * share every rule: a title, at least one assignee, a real due date (always required), and for a
+ * recurring task a positive whole-number cadence.
+ */
+function parseTaskFields(body: unknown): { fields: NewTaskFields } | { error: ApiResult } {
   const raw = (body ?? {}) as {
     projectId?: unknown
     title?: unknown
@@ -117,80 +118,105 @@ async function handleTasksCreate(
     cadenceValue?: unknown
     cadenceUnit?: unknown
   }
+  const bad = (error: string) => ({ error: { status: 400, json: { error } } as ApiResult })
 
   if (typeof raw.title !== 'string' || !raw.title.trim()) {
-    return { status: 400, json: { error: '"title" (non-empty string) is required' } }
+    return bad('"title" (non-empty string) is required')
   }
   if (
     !Array.isArray(raw.assigneeIds) ||
     raw.assigneeIds.length === 0 ||
     raw.assigneeIds.some((id) => typeof id !== 'string')
   ) {
-    return { status: 400, json: { error: '"assigneeIds" (non-empty string array) is required' } }
+    return bad('"assigneeIds" (non-empty string array) is required')
   }
   if (raw.projectId !== undefined && raw.projectId !== null && typeof raw.projectId !== 'string') {
-    return { status: 400, json: { error: '"projectId" must be a string or null' } }
+    return bad('"projectId" must be a string or null')
   }
-  if (
-    raw.description !== undefined &&
-    raw.description !== null &&
-    typeof raw.description !== 'string'
-  ) {
-    return { status: 400, json: { error: '"description" must be a string or null' } }
+  if (raw.description !== undefined && raw.description !== null && typeof raw.description !== 'string') {
+    return bad('"description" must be a string or null')
   }
   if (raw.notes !== undefined && raw.notes !== null && typeof raw.notes !== 'string') {
-    return { status: 400, json: { error: '"notes" must be a string or null' } }
+    return bad('"notes" must be a string or null')
   }
-  if (raw.dueDate !== undefined && raw.dueDate !== null && typeof raw.dueDate !== 'string') {
-    return { status: 400, json: { error: '"dueDate" must be a string or null' } }
+  if (typeof raw.dueDate !== 'string' || !isRealDate(raw.dueDate)) {
+    return bad('A task needs a "dueDate" (YYYY-MM-DD)')
   }
   if (
     raw.visibility !== undefined &&
     !TASK_VISIBILITIES.includes(raw.visibility as (typeof TASK_VISIBILITIES)[number])
   ) {
-    return {
-      status: 400,
-      json: { error: `"visibility" must be one of: ${TASK_VISIBILITIES.join(', ')}` },
-    }
+    return bad(`"visibility" must be one of: ${TASK_VISIBILITIES.join(', ')}`)
   }
 
   const isRecurring = raw.isRecurring === true
-  if (isRecurring) {
-    if (
-      typeof raw.cadenceValue !== 'number' ||
+  if (
+    isRecurring &&
+    (typeof raw.cadenceValue !== 'number' ||
       !Number.isInteger(raw.cadenceValue) ||
       raw.cadenceValue <= 0 ||
-      !CADENCE_UNITS.includes(raw.cadenceUnit as (typeof CADENCE_UNITS)[number])
-    ) {
-      return {
-        status: 400,
-        json: {
-          error: '"cadenceValue" (positive whole number) and "cadenceUnit" (day, week, or month) are required when isRecurring is true',
-        },
-      }
-    }
-    // The next cycle's due date is computed from this one, so a recurring task needs a date.
-    if (typeof raw.dueDate !== 'string' || !raw.dueDate) {
-      return { status: 400, json: { error: 'A recurring task needs a "dueDate"' } }
-    }
+      !CADENCE_UNITS.includes(raw.cadenceUnit as (typeof CADENCE_UNITS)[number]))
+  ) {
+    return bad(
+      '"cadenceValue" (positive whole number) and "cadenceUnit" (day, week, or month) are required when isRecurring is true',
+    )
   }
 
-  try {
-    const task = await createTask(resolved.admin, resolved.profileId, {
+  return {
+    fields: {
       projectId: (raw.projectId ?? null) as string | null,
       title: raw.title.trim(),
       description: (raw.description ?? null) as string | null,
       notes: typeof raw.notes === 'string' && raw.notes.trim() ? raw.notes : null,
-      dueDate: (raw.dueDate ?? null) as string | null,
+      dueDate: raw.dueDate,
       assigneeIds: raw.assigneeIds as string[],
       visibility: (raw.visibility ?? 'private') as 'private' | 'public',
       isRecurring,
       cadenceValue: isRecurring ? (raw.cadenceValue as number) : null,
       cadenceUnit: isRecurring ? (raw.cadenceUnit as CadenceUnit) : null,
-    })
+    },
+  }
+}
+
+/** The 'create' action of POST /api/tasks. */
+async function handleTasksCreate(
+  authorizationHeader: string | undefined,
+  body: unknown,
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+
+  const parsed = parseTaskFields(body)
+  if ('error' in parsed) return parsed.error
+
+  try {
+    const task = await createTask(resolved.admin, resolved.profileId, parsed.fields)
     return { status: 200, json: { task } }
   } catch (err) {
     return ruleOrServerError(err, 'Could not create task')
+  }
+}
+
+/** The 'update' action of POST /api/tasks — body is { taskId, ...the Add Task fields }. Manual tasks only. */
+async function handleTasksUpdate(
+  authorizationHeader: string | undefined,
+  body: unknown,
+): Promise<ApiResult> {
+  const resolved = await resolveProfile(authorizationHeader)
+  if ('error' in resolved) return resolved.error
+
+  const { taskId } = (body ?? {}) as { taskId?: unknown }
+  if (typeof taskId !== 'string') {
+    return { status: 400, json: { error: '"taskId" (string) is required' } }
+  }
+  const parsed = parseTaskFields(body)
+  if ('error' in parsed) return parsed.error
+
+  try {
+    const task = await updateTask(resolved.admin, taskId, resolved.profileId, parsed.fields)
+    return { status: 200, json: { task } }
+  } catch (err) {
+    return ruleOrServerError(err, 'Could not update task')
   }
 }
 
@@ -296,7 +322,7 @@ async function handleTasksDelete(
 }
 
 /**
- * POST /api/tasks — action dispatch: { action: 'create' | 'set-status' | 'set-notes' | 'set-meeting-date' | 'delete', ... }.
+ * POST /api/tasks — action dispatch: { action: 'create' | 'update' | 'set-status' | 'set-notes' | 'set-meeting-date' | 'delete', ... }.
  * See the Hobby-plan function-count note in vercelAdapter.ts.
  */
 export async function handleTasksPost(
@@ -307,6 +333,8 @@ export async function handleTasksPost(
   switch (action) {
     case 'create':
       return handleTasksCreate(authorizationHeader, body)
+    case 'update':
+      return handleTasksUpdate(authorizationHeader, body)
     case 'set-status':
       return handleTasksSetStatus(authorizationHeader, body)
     case 'set-notes':
@@ -318,7 +346,7 @@ export async function handleTasksPost(
     default:
       return {
         status: 400,
-        json: { error: '"action" must be "create", "set-status", "set-notes", "set-meeting-date", or "delete"' },
+        json: { error: '"action" must be "create", "update", "set-status", "set-notes", "set-meeting-date", or "delete"' },
       }
   }
 }

@@ -92,6 +92,10 @@ export function azureOidFromClaims(claims: AzureIdTokenClaims): string {
 /**
  * Upsert and return the `profiles` row for a set of verified token claims.
  * This is the single place a profile is created.
+ *
+ * `title` is deliberately NOT part of the upsert: a new profile gets NULL and an existing one keeps
+ * whatever it has. The app blocks on a null title (the "Choose your role" modal), so it must never
+ * be defaulted here.
  */
 export async function upsertProfile(
   admin: SupabaseClient,

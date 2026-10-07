@@ -109,16 +109,15 @@ const TITLE_LABEL: Record<'pm' | 'apm', string> = {
 
 /**
  * Self-reported role, used only to feed the star -> auto-assign logic on
- * projects (see supabase/schema.sql) — not a permission tier. Required on
- * first login (shown highlighted, un-dismissable until set); editable at any
- * time afterward via the same two buttons.
+ * projects (see supabase/schema.sql) — not a permission tier. It's required: until it's set the
+ * app shows the blocking RoleGate modal instead of any page, so this is where it's changed later.
  */
 function RoleMenuItem({
   title,
   onSetTitle,
 }: {
   title: 'pm' | 'apm' | null
-  onSetTitle: (title: 'pm' | 'apm') => Promise<void>
+  onSetTitle: (title: 'pm' | 'apm') => Promise<boolean>
 }) {
   const [saving, setSaving] = useState(false)
 

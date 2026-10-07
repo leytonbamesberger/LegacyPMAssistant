@@ -3,7 +3,17 @@ import { useMsal } from '@azure/msal-react'
 import { Link } from 'react-router-dom'
 import { useProject } from '../contexts/ProjectContext'
 import { useProfile } from '../contexts/ProfileContext'
-import { fetchTasks, setMeetingDate, setTaskNotes, setTaskStatus, type Task, type TaskStatus } from '../lib/tasks'
+import {
+  fetchTasks,
+  setMeetingDate,
+  setTaskNotes,
+  setTaskStatus,
+  updateTask,
+  type NewTaskInput,
+  type Task,
+  type TaskStatus,
+} from '../lib/tasks'
+import { AddTaskModal } from '../components/AddTaskModal'
 import { NO_TASK_FILTERS, TaskFilters, type TaskFilterState } from '../components/TaskFilters'
 import { TaskTable } from '../components/TaskTable'
 import type { TaskListRow } from '../lib/taskRows'
@@ -23,6 +33,7 @@ export function ArchivePage() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
+  const [editingTask, setEditingTask] = useState<Task | null>(null)
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -73,6 +84,14 @@ export function ArchivePage() {
     void loadPage()
   }
 
+  // Editing a completed manual task changes it in place; it stays complete, so it stays on the Archive.
+  async function handleUpdate(task: Task, fields: NewTaskInput): Promise<boolean> {
+    if (!account) return false
+    const updated = await updateTask(instance, account, task.id, fields)
+    if (updated) void loadPage()
+    return updated !== null
+  }
+
   async function handleSaveNotes(task: Task, notes: string | null) {
     if (!account) return
     const updated = await setTaskNotes(instance, account, task.id, notes)
@@ -120,12 +139,25 @@ export function ArchivePage() {
           nameFor={nameFor}
           onStatus={(task, status) => void handleStatus(task, status)}
           onSaveNotes={handleSaveNotes}
+          onEdit={setEditingTask}
           onMeetingDate={(task, date) => void handleMeetingDate(task, date)}
         />
       </div>
 
       {total > 0 && (
         <Pagination page={page} pageCount={pageCount} total={total} onPage={setPage} />
+      )}
+
+      {editingTask && (
+        <AddTaskModal
+          presetProjectId={null}
+          projects={projects}
+          directory={directory}
+          currentProfileId={profile?.id ?? null}
+          editing={editingTask}
+          onClose={() => setEditingTask(null)}
+          onSave={(fields) => handleUpdate(editingTask, fields)}
+        />
       )}
     </div>
   )

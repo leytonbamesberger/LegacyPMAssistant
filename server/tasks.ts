@@ -3,8 +3,11 @@ import { addCadence, type CadenceUnit } from '../shared/period.js'
 import { selectAll } from './selectAll.js'
 
 export type TaskStatus = 'not_started' | 'in_progress' | 'complete'
-/** 'flow' is kept only so the list filter still accepts it; flow reports are no longer task rows. */
-export type TaskSourceCategory = 'setup' | 'recurring' | 'flow'
+/**
+ * 'setup' | 'recurring' come from initiation; 'closeout' from the Closeout Project wizard. 'flow' is
+ * kept only so the list filter still accepts it; flow reports are no longer task rows.
+ */
+export type TaskSourceCategory = 'setup' | 'recurring' | 'closeout' | 'flow'
 
 export interface TaskRecord {
   id: string
@@ -379,7 +382,64 @@ export function createTask(
   })
 }
 
-function isRealDate(value: string): boolean {
+/**
+ * Edits a manual task in place (the Add Task form in edit mode). Checklist tasks are managed by the
+ * project and are refused. The creator (`assigned_by`) stays as it was; `type` is re-derived from the
+ * new assignees/project against that creator. Description isn't part of the form, so it is left alone.
+ *
+ * Recurrence changes land on this row and so reach later cycles only: the next row is copied from this
+ * one when it's completed. A finished task is history — its successor already exists — so its
+ * recurrence settings are kept as they were.
+ */
+export async function updateTask(
+  admin: SupabaseClient,
+  taskId: string,
+  callerProfileId: string,
+  fields: NewTaskFields,
+): Promise<TaskRecord> {
+  const task = await getTaskIfAccessible(admin, taskId, callerProfileId)
+  if (task.source_category) {
+    throw new TaskRuleError('Checklist tasks are managed by the project and can’t be edited')
+  }
+
+  const finished = task.status === 'complete'
+  const isRecurring = finished ? task.is_recurring : fields.isRecurring
+  const assigneeIds = [...new Set(fields.assigneeIds)]
+  const row = {
+    type: inferTaskType(task.assigned_by ?? callerProfileId, assigneeIds, fields.projectId),
+    project_id: fields.projectId,
+    title: fields.title,
+    due_date: fields.dueDate,
+    notes: fields.notes,
+    visibility: fields.visibility,
+    is_recurring: isRecurring,
+    cadence_value: finished ? task.cadence_value : isRecurring ? fields.cadenceValue : null,
+    cadence_unit: finished ? task.cadence_unit : isRecurring ? fields.cadenceUnit : null,
+  }
+  const { error } = await admin.from('tasks').update(row).eq('id', taskId)
+  if (error) throw new Error(error.message)
+
+  // Add the new assignees before dropping the old, so the task is never left without one.
+  const adding = assigneeIds.filter((id) => !task.assignee_ids.includes(id))
+  if (adding.length > 0) {
+    const { error: addError } = await admin
+      .from('task_assignees')
+      .insert(adding.map((user_id) => ({ task_id: taskId, user_id })))
+    if (addError) throw new Error(addError.message)
+  }
+  const removing = task.assignee_ids.filter((id) => !assigneeIds.includes(id))
+  if (removing.length > 0) {
+    const { error: removeError } = await admin
+      .from('task_assignees')
+      .delete()
+      .eq('task_id', taskId)
+      .in('user_id', removing)
+    if (removeError) throw new Error(removeError.message)
+  }
+  return { ...task, ...row, assignee_ids: assigneeIds }
+}
+
+export function isRealDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
   const d = new Date(`${value}T00:00:00Z`)
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value
@@ -453,6 +513,16 @@ async function getTaskIfAccessible(
  */
 async function spawnNextRecurrence(admin: SupabaseClient, task: TaskRecord): Promise<TaskRecord | null> {
   if (!task.cadence_value || !task.cadence_unit) return null
+  // A project that dropped this item (Edit Project, or Closeout's "stop recurring") gets no next cycle.
+  if (task.project_id && task.checklist_item_id) {
+    const { data: excluded, error } = await admin
+      .from('project_checklist_item_exclusions')
+      .select('checklist_item_id')
+      .eq('project_id', task.project_id)
+      .eq('checklist_item_id', task.checklist_item_id)
+    if (error) throw new Error(error.message)
+    if ((excluded ?? []).length > 0) return null
+  }
   const base = task.due_date ?? new Date().toISOString().slice(0, 10)
   return insertTask(admin, {
     type: task.type,

@@ -42,7 +42,6 @@ export interface SetupSelection extends ItemRef {
 
 export interface RecurringSelection extends ItemRef {
   startDate: string | null
-  timeOfDay: string | null
   cadenceValue: number | null
   cadenceUnit: CadenceUnit | null
 }

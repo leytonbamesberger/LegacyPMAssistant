@@ -4,7 +4,7 @@ import type { CadenceUnit } from '../../shared/period'
 
 export type { CadenceUnit }
 export type TaskStatus = 'not_started' | 'in_progress' | 'complete'
-export type TaskSourceCategory = 'setup' | 'recurring' | 'flow'
+export type TaskSourceCategory = 'setup' | 'recurring' | 'closeout' | 'flow'
 
 export interface Task {
   id: string
@@ -41,7 +41,8 @@ export interface NewTaskInput {
   title: string
   description: string | null
   notes: string | null
-  dueDate: string | null
+  /** Required (YYYY-MM-DD). */
+  dueDate: string
   assigneeIds: string[]
   visibility: 'private' | 'public'
   isRecurring: boolean
@@ -108,6 +109,17 @@ export async function createTask(
   fields: NewTaskInput,
 ): Promise<Task | null> {
   const body = await postTaskAction<{ task: Task }>(instance, account, { action: 'create', ...fields })
+  return body?.task ?? null
+}
+
+/** Edits a manual task in place with the Add Task form's fields. Null when the server refused or failed. */
+export async function updateTask(
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  taskId: string,
+  fields: NewTaskInput,
+): Promise<Task | null> {
+  const body = await postTaskAction<{ task: Task }>(instance, account, { action: 'update', taskId, ...fields })
   return body?.task ?? null
 }
 

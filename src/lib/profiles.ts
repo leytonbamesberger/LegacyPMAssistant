@@ -21,7 +21,8 @@ export interface ProfileDirectoryEntry {
  *
  * The browser never writes to Supabase directly. `POST /api/profile` verifies
  * the Microsoft ID token server-side and does the upsert with the service-role
- * key. See `server/profileHandler.ts`.
+ * key. See `server/profileHandler.ts`. This never sets a title: a new profile's title stays null
+ * until the user picks a role in the "Choose your role" modal.
  */
 export async function ensureProfile(
   instance: IPublicClientApplication,
