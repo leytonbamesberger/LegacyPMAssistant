@@ -1,5 +1,6 @@
 import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
 import { apiFetch, getIdToken } from './apiClient'
+import type { CadenceUnit } from '../../shared/period'
 import type { RecurringSelection, SetupSelection } from './initiation'
 
 export interface Project {
@@ -143,9 +144,34 @@ export interface ProjectEditCatalog {
     apm_id: string | null
   }
   items: EditCatalogItem[]
-  /** Existing open Setup due date ("Setup complete by"), to prefill items added later. */
+  /** Existing open Setup due date ("Setup complete by"): prefills items added later; null = no open Setup tasks. */
   setupDueDate: string | null
   closeout: CloseoutCatalogItem[]
+  /** What the Dates tab shows. */
+  dates: EditDatesCatalog
+}
+
+export interface EditDatesCatalog {
+  meetings: { taskId: string; itemId: string; name: string; complete: boolean; dueDate: string | null; meetingDate: string | null }[]
+  /** The current open instance of each included recurring item. */
+  recurring: {
+    taskId: string
+    itemId: string
+    name: string
+    dueDate: string | null
+    cadenceValue: number
+    cadenceUnit: CadenceUnit
+  }[]
+  /** Closeout tasks (complete ones are read-only). */
+  closeout: { taskId: string; itemId: string; name: string; complete: boolean; dueDate: string | null }[]
+}
+
+/** Date changes from the Dates tab: only what changed. */
+export interface EditDatesPayload {
+  setupDueDate?: string
+  meetings: { taskId: string; meetingDate: string | null }[]
+  recurring: { taskId: string; dueDate?: string; cadenceValue?: number; cadenceUnit?: CadenceUnit }[]
+  closeout: { taskId: string; dueDate: string }[]
 }
 
 export function fetchProjectEditCatalog(
@@ -166,6 +192,8 @@ export interface EditProjectPayload {
   /** Newly (re)included items with their dates (same shape the initiation wizard sends). */
   addSetup: SetupSelection[]
   addRecurring: RecurringSelection[]
+  /** Omitted = no date changes. */
+  dates?: EditDatesPayload
 }
 
 export interface CloseoutPayload {

@@ -19,22 +19,39 @@ import {
   type SetupConfig,
   type WizardItem,
 } from '../lib/wizardItems'
+import {
+  datesPayload,
+  datesValid,
+  EditDatesTab,
+  hasDateChanges,
+  initialDatesState,
+  type DatesState,
+} from './EditProjectDates'
 import { Modal } from './Modal'
 import { ProfileSearchSelect } from './ProfileSearchSelect'
 import { RecurringScheduleStep, SetupDatesStep } from './WizardSteps'
 
 type Step = 'main' | 'setup' | 'recurring'
+type Tab = 'people' | 'tasks' | 'dates'
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: 'people', label: 'People' },
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'dates', label: 'Dates' },
+]
 
 /**
- * Edit Project: change a project's PM / APM and which Setup and Recurring items apply to it, after it
- * was initiated. Built from the initiation wizard's pieces — the same PM/APM picker and the same Setup
+ * Edit Project: change a project's PM / APM, which Setup and Recurring items apply to it, and its open
+ * tasks' dates, after it was initiated. The first step is three tabs (People, Tasks, Dates) with one Save
+ * for all of them. Built from the initiation wizard's pieces — the same PM/APM picker and the same Setup
  * dates / Recurring schedule steps (components/WizardSteps.tsx). Nothing is saved until the final Save.
  *
  *  - Unchecking an open item removes it (its open task is deleted and, for a recurring item, no further
  *    instance is created). An item whose task is already complete is locked on.
  *  - Checking an item that isn't on the project opens a follow-up step for what the wizard would ask
  *    (Setup: a due date, plus a date / TBD / Done for a meeting; Recurring: start date and cadence).
- *  - An uninitiated project can only have its PM and APM changed.
+ *  - Dates tab: open items are editable, completed ones read-only (meetings excepted — see EditProjectDates).
+ *  - An uninitiated project can only have its PM and APM changed (no tabs, no Dates).
  */
 export function EditProjectModal({
   project,
@@ -53,6 +70,8 @@ export function EditProjectModal({
   const [catalog, setCatalog] = useState<ProjectEditCatalog | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [step, setStep] = useState<Step>('main')
+  const [tab, setTab] = useState<Tab>('people')
+  const [datesState, setDatesState] = useState<DatesState | null>(null)
 
   const [pmId, setPmId] = useState<string | null>(project.pm_id)
   const [apmId, setApmId] = useState<string | null>(project.apm_id)
@@ -81,6 +100,7 @@ export function EditProjectModal({
       setChecked(Object.fromEntries(result.items.map((i) => [i.id, i.state === 'included'])))
       // Added Setup items default to the project's existing open setup due date, else today.
       setSetupCompleteBy(result.setupDueDate ?? localToday())
+      setDatesState(initialDatesState(result))
     })()
     return () => {
       cancelled = true
@@ -119,8 +139,17 @@ export function EditProjectModal({
   const isLast = stepIndex === steps.length - 1
   const canAdvance = step === 'setup' ? setupValid : step === 'recurring' ? recurringValid : true
 
+  const removedIds = new Set(removed.map((i) => i.id))
+  const dateEdits = catalog && datesState && initiated ? datesPayload(catalog, datesState, removedIds) : null
+  const datesOk = !catalog || !datesState || !initiated || datesValid(catalog, datesState, removedIds)
+
   const personChanged = !!catalog && (pmId !== catalog.project.pm_id || apmId !== catalog.project.apm_id)
-  const dirty = personChanged || removed.length > 0 || addedSetup.length + addedRecurring.length > 0
+  const dirty =
+    personChanged ||
+    removed.length > 0 ||
+    addedSetup.length + addedRecurring.length > 0 ||
+    (!!dateEdits && hasDateChanges(dateEdits))
+  const saveBlocked = !canAdvance || !datesOk
 
   async function handleSave() {
     if (!account || !catalog || submitting) return
@@ -153,6 +182,7 @@ export function EditProjectModal({
           cadenceUnit: cfg.unit,
         }
       }),
+      dates: dateEdits && hasDateChanges(dateEdits) ? dateEdits : undefined,
     })
     setSubmitting(false)
     if (!result.ok) {
@@ -174,7 +204,7 @@ export function EditProjectModal({
           {catalog && steps.length > 1 && (
             <p className="mt-0.5 text-xs text-legacy-blue-light">
               Step {stepIndex + 1} of {steps.length} —{' '}
-              {step === 'main' ? 'People and checklist' : step === 'setup' ? 'Added Setup items' : 'Added Recurring items'}
+              {step === 'main' ? 'People, tasks and dates' : step === 'setup' ? 'Added Setup items' : 'Added Recurring items'}
             </p>
           )}
         </div>
@@ -195,46 +225,79 @@ export function EditProjectModal({
       ) : (
         <>
           <div className="mt-4">
+            {step === 'main' && initiated && (
+              <div role="tablist" aria-label="Edit project" className="mb-4 flex gap-1 border-b border-legacy-blue-light/20">
+                {TABS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="tab"
+                    id={`edit-tab-${t.id}`}
+                    aria-selected={tab === t.id}
+                    aria-controls={`edit-panel-${t.id}`}
+                    onClick={() => setTab(t.id)}
+                    className={`-mb-px border-b-2 px-3 py-1.5 text-sm font-medium ${
+                      tab === t.id
+                        ? 'border-legacy-blue-dark text-legacy-blue-dark'
+                        : 'border-transparent text-legacy-blue-light hover:text-legacy-blue-dark'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {step === 'main' && (
               <div className="space-y-5">
-                <div>
-                  <p className="text-sm text-legacy-blue-light">
-                    Changing the PM or APM moves this project's open Setup, Recurring and Closeout tasks to
-                    the new person. Completed tasks stay as they are.
-                  </p>
-                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <ProfileSearchSelect label="PM" value={pmId} directory={directory} onChange={setPmId} />
-                    <ProfileSearchSelect label="APM" value={apmId} directory={directory} onChange={setApmId} />
+                {(!initiated || tab === 'people') && (
+                  <div role="tabpanel" id="edit-panel-people" aria-labelledby="edit-tab-people">
+                    <p className="text-sm text-legacy-blue-light">
+                      Changing the PM or APM moves this project's open Setup, Recurring and Closeout tasks to
+                      the new person. Completed tasks stay as they are.
+                    </p>
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <ProfileSearchSelect label="PM" value={pmId} directory={directory} onChange={setPmId} />
+                      <ProfileSearchSelect label="APM" value={apmId} directory={directory} onChange={setApmId} />
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {initiated && tab === 'dates' && datesState && (
+                  <div role="tabpanel" id="edit-panel-dates" aria-labelledby="edit-tab-dates">
+                    <EditDatesTab catalog={catalog} state={datesState} onChange={setDatesState} removed={removedIds} />
+                  </div>
+                )}
 
                 {initiated ? (
-                  <>
-                    <Checklist
-                      title="Setup items"
-                      items={setupAll}
-                      checked={checked}
-                      onToggle={(id, value) => setChecked((prev) => ({ ...prev, [id]: value }))}
-                    />
-                    <Checklist
-                      title="Recurring items"
-                      items={recurringAll}
-                      checked={checked}
-                      onToggle={(id, value) => setChecked((prev) => ({ ...prev, [id]: value }))}
-                    />
-                    <div className="space-y-1 text-xs text-legacy-blue-light">
-                      <p>
-                        Unchecking an open item deletes its open task (a recurring item also stops coming
-                        back). Items that are already complete are locked. Checking an item that isn't on the
-                        project asks for its dates next.
-                      </p>
-                      {removed.length > 0 && (
-                        <p className="font-medium text-legacy-red">
-                          Will remove: {removed.map((i) => i.name).join(', ')}
+                  tab === 'tasks' && (
+                    <div className="space-y-5" role="tabpanel" id="edit-panel-tasks" aria-labelledby="edit-tab-tasks">
+                      <Checklist
+                        title="Setup items"
+                        items={setupAll}
+                        checked={checked}
+                        onToggle={(id, value) => setChecked((prev) => ({ ...prev, [id]: value }))}
+                      />
+                      <Checklist
+                        title="Recurring items"
+                        items={recurringAll}
+                        checked={checked}
+                        onToggle={(id, value) => setChecked((prev) => ({ ...prev, [id]: value }))}
+                      />
+                      <div className="space-y-1 text-xs text-legacy-blue-light">
+                        <p>
+                          Unchecking an open item deletes its open task (a recurring item also stops coming
+                          back). Items that are already complete are locked. Checking an item that isn't on the
+                          project asks for its dates next.
                         </p>
-                      )}
+                        {removed.length > 0 && (
+                          <p className="font-medium text-legacy-red">
+                            Will remove: {removed.map((i) => i.name).join(', ')}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                  </>
+                  )
                 ) : (
                   <p className="text-xs text-legacy-blue-light">
                     This project hasn't been initiated yet, so only its PM and APM can be changed here.
@@ -265,6 +328,11 @@ export function EditProjectModal({
             )}
           </div>
 
+          {!datesOk && (
+            <p className="mt-3 text-sm text-legacy-red">
+              Some dates on the Dates tab are blank or have a cadence that isn't a positive whole number.
+            </p>
+          )}
           {submitError && <p className="mt-3 text-sm text-legacy-red">{submitError}</p>}
 
           <div className="mt-5 flex items-center justify-between border-t border-legacy-blue-light/15 pt-3">
@@ -280,7 +348,7 @@ export function EditProjectModal({
               <button
                 type="button"
                 onClick={() => void handleSave()}
-                disabled={submitting || !dirty || !canAdvance}
+                disabled={submitting || !dirty || saveBlocked}
                 className="rounded-full bg-legacy-blue-dark px-4 py-1.5 text-xs font-medium text-white disabled:opacity-40"
               >
                 {submitting ? 'Saving…' : 'Save'}
@@ -289,7 +357,7 @@ export function EditProjectModal({
               <button
                 type="button"
                 onClick={() => setStep(steps[stepIndex + 1])}
-                disabled={!canAdvance}
+                disabled={saveBlocked}
                 className="rounded-full bg-legacy-blue-dark px-4 py-1.5 text-xs font-medium text-white disabled:opacity-40"
               >
                 Next

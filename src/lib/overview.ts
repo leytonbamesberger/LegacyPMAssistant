@@ -6,7 +6,15 @@ import type { OverviewView } from '../../shared/overviewView'
 export interface OverviewColumn {
   id: string
   name: string
-  phase: 'setup' | 'recurring' | 'closeout'
+  /** Column group; `meetings` = the four checklist_items.is_meeting items, split out of Setup. */
+  phase: 'setup' | 'meetings' | 'recurring' | 'closeout'
+}
+
+/** The meeting task behind a Meetings cell. */
+export interface OverviewMeeting {
+  status: string
+  due_date: string | null
+  meeting_date: string | null
 }
 
 export interface OverviewRow {
@@ -17,8 +25,10 @@ export interface OverviewRow {
   initiated: boolean
   /** checklist_item_ids that show a check. */
   done: string[]
-  /** checklist_item_ids that don't apply to this project (shown as a disabled box; for closeout: it has no task for the item). Everything else applies, not done. */
+  /** checklist_item_ids the project has no task for (excluded, never created, closeout not started; shown as a disabled box). Everything else applies, not done. */
   na: string[]
+  /** Meeting task per Meetings column the project has one for (keyed by checklist_item_id). */
+  meetings: Record<string, OverviewMeeting>
   /** Current period's flow report: submitted, and its four budget boxes. */
   flow: { report: boolean } & FlowBudgetChecklist
 }

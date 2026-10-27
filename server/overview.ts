@@ -5,10 +5,20 @@ import type { FlowBudgetChecklist } from '../shared/flowBudget.js'
 import { getFlowReportsForMonth } from './flowReports.js'
 import { selectAll } from './selectAll.js'
 
+/** Column groups, left to right. `meetings` = the checklist_items.is_meeting items, split out of Setup. */
+export type OverviewGroup = 'setup' | 'meetings' | 'recurring' | 'closeout'
+
 export interface OverviewColumn {
   id: string
   name: string
-  phase: 'setup' | 'recurring' | 'closeout'
+  phase: OverviewGroup
+}
+
+/** What a Meetings cell needs from the project's meeting task. */
+export interface OverviewMeeting {
+  status: string
+  due_date: string | null
+  meeting_date: string | null
 }
 
 /** The current period's flow report for one project: submitted, plus its four budget boxes. */
@@ -20,10 +30,11 @@ export interface OverviewData {
   columns: OverviewColumn[]
   /**
    * One per project in the view (the union of Added / the picked PMs' projects / picked projects),
-   * initiated or not. `done` = checklist_item_ids shown checked; `na` = ids that don't apply to this
-   * project (excluded default, another project's custom item, or a closeout item it has no task for) —
-   * shown as a disabled box. Every other column is "applies, not done". An uninitiated project has
-   * empty done/na (the page shows one merged "Initiate this project" cell) but real `flow` values.
+   * initiated or not. `done` = checklist_item_ids shown checked; `na` = ids the project has no task for
+   * (excluded, never created, another project's custom item, closeout not started) — shown as a
+   * disabled box. Every other column is "applies, not done". `meetings` = the meeting task behind each
+   * Meetings column the project has one for (keyed by checklist_item_id). An uninitiated project has
+   * empty done/na/meetings (the page shows one merged "Initiate this project" cell) but real `flow` values.
    */
   rows: {
     project_id: string
@@ -31,6 +42,7 @@ export interface OverviewData {
     initiated: boolean
     done: string[]
     na: string[]
+    meetings: Record<string, OverviewMeeting>
     flow: OverviewFlow
   }[]
 }
@@ -40,6 +52,7 @@ interface InstanceRow {
   checklist_item_id: string
   status: string
   due_date: string | null
+  meeting_date: string | null
 }
 
 /**
@@ -137,7 +150,7 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
         () =>
           admin
             .from('tasks')
-            .select('project_id, checklist_item_id, status, due_date')
+            .select('project_id, checklist_item_id, status, due_date, meeting_date')
             .in('project_id', chunk)
             .not('checklist_item_id', 'is', null)
             .or(`source_category.eq.setup,source_category.eq.closeout,status.neq.complete,due_date.gte.${today}`)
@@ -165,80 +178,81 @@ export async function getOverview(admin: SupabaseClient, profileId: string): Pro
 
   const { data: items, error: itemsError } = await admin
     .from('checklist_items')
-    .select('id, name, phase, sort_order, project_id')
+    .select('id, name, phase, sort_order, project_id, is_meeting')
     .in('phase', ['setup', 'recurring', 'closeout'])
     .order('sort_order')
   if (itemsError) throw new Error(itemsError.message)
 
+  const groupOf = (item: { phase: unknown; is_meeting: unknown }): OverviewGroup =>
+    item.phase === 'setup' && item.is_meeting === true ? 'meetings' : (item.phase as OverviewGroup)
   const phaseByItem = new Map<string, 'setup' | 'recurring' | 'closeout'>()
   for (const item of items ?? []) phaseByItem.set(item.id as string, item.phase as 'setup' | 'recurring' | 'closeout')
 
   const byChain = new Map<string, InstanceRow[]>()
-  const applicable = new Set<string>()
+  const hasTask = new Set<string>() // checklist_item_ids some shown project has a task for
   for (const row of instances) {
     if (!phaseByItem.has(row.checklist_item_id)) continue
     const key = `${row.project_id}|${row.checklist_item_id}`
     byChain.set(key, [...(byChain.get(key) ?? []), row])
-    applicable.add(row.checklist_item_id)
+    hasTask.add(row.checklist_item_id)
   }
 
-  // A Setup / Recurring column exists only if some shown project actually has that item — so an item
-  // every shown project excluded, and other projects' custom items, add no empty columns. The shared
-  // closeout items are always columns once any initiated project is shown (a project with no closeout
-  // task for one just gets the not-applicable box).
-  const PHASE_ORDER = { setup: 0, recurring: 1, closeout: 2 } as const
+  // The columns are the whole shared catalog, whatever the view's projects use. The one exception is a
+  // project's own custom item (checklist_items.project_id set): its column shows only while a shown
+  // project has it, at the end of its group.
+  const GROUP_ORDER = { setup: 0, meetings: 1, recurring: 2, closeout: 3 } as const
   const columns: OverviewColumn[] = (items ?? [])
-    .filter((item) => {
-      if (item.phase === 'closeout') return item.project_id === null && initiatedIds.length > 0
-      return applicable.has(item.id as string)
-    })
+    .filter((item) => item.project_id === null || hasTask.has(item.id as string))
     .sort(
       (a, b) =>
-        PHASE_ORDER[a.phase as keyof typeof PHASE_ORDER] - PHASE_ORDER[b.phase as keyof typeof PHASE_ORDER] ||
+        GROUP_ORDER[groupOf(a)] - GROUP_ORDER[groupOf(b)] ||
+        Number(a.project_id !== null) - Number(b.project_id !== null) ||
         (a.sort_order as number) - (b.sort_order as number),
     )
-    .map((item) => ({
-      id: item.id as string,
-      name: item.name as string,
-      phase: item.phase as OverviewColumn['phase'],
-    }))
+    .map((item) => ({ id: item.id as string, name: item.name as string, phase: groupOf(item) }))
 
   const flowReports = await getFlowReportsForMonth(admin, shownIds, defaultFlowReportMonth())
   const flowByProject = new Map(flowReports.map((r) => [r.project_id, r]))
 
-  const ownerByItem = new Map((items ?? []).map((i) => [i.id as string, i.project_id as string | null]))
-
-  const rows = shownIds.map((projectId) => ({
-    project_id: projectId,
-    pm_id: pmByProject.get(projectId) ?? null,
-    initiated: !uninitiatedIds.includes(projectId),
-    na: (uninitiatedIds.includes(projectId) ? [] : columns)
-      .filter((col) => {
-        if (col.phase === 'closeout') return !byChain.has(`${projectId}|${col.id}`) // no closeout task for it
-        const owner = ownerByItem.get(col.id)
-        // A custom item belongs to one project (and can be dropped from it); a shared default can be excluded per project.
-        return owner
-          ? owner !== projectId || excluded.has(`${projectId}|${col.id}`)
-          : excluded.has(`${projectId}|${col.id}`)
-      })
-      .map((col) => col.id),
-    done: columns
-      .filter((col) => {
-        const chain = byChain.get(`${projectId}|${col.id}`)
-        if (!chain) return false // no task: not applicable to this project
-        return col.phase === 'recurring'
-          ? currentCycleComplete(chain, today)
-          : chain.some((t) => t.status === 'complete') // Setup and Closeout are one-time
-      })
-      .map((col) => col.id),
-    flow: ((report) => ({
-      report: report?.status === 'completed',
-      budget_forecasted: report?.budget_forecasted === true,
-      budget_projections_updated: report?.budget_projections_updated === true,
-      budget_snapshots_taken: report?.budget_snapshots_taken === true,
-      budget_sent_to_erp: report?.budget_sent_to_erp === true,
-    }))(flowByProject.get(projectId)),
-  }))
+  const rows = shownIds.map((projectId) => {
+    const initiated = !uninitiatedIds.includes(projectId)
+    const chainOf = (itemId: string) => byChain.get(`${projectId}|${itemId}`)
+    const meetings: Record<string, OverviewMeeting> = {}
+    if (initiated) {
+      for (const col of columns) {
+        if (col.phase !== 'meetings') continue
+        const chain = chainOf(col.id)
+        const task = chain?.find((t) => t.status === 'complete') ?? chain?.[0]
+        if (task) meetings[col.id] = { status: task.status, due_date: task.due_date, meeting_date: task.meeting_date }
+      }
+    }
+    return {
+      project_id: projectId,
+      pm_id: pmByProject.get(projectId) ?? null,
+      initiated,
+      // No task (or the item was excluded for this project) = doesn't apply.
+      na: (initiated ? columns : [])
+        .filter((col) => !chainOf(col.id) || excluded.has(`${projectId}|${col.id}`))
+        .map((col) => col.id),
+      meetings,
+      done: columns
+        .filter((col) => {
+          const chain = byChain.get(`${projectId}|${col.id}`)
+          if (!chain) return false // no task: not applicable to this project
+          return col.phase === 'recurring'
+            ? currentCycleComplete(chain, today)
+            : chain.some((t) => t.status === 'complete') // Setup and Closeout are one-time
+        })
+        .map((col) => col.id),
+      flow: ((report) => ({
+        report: report?.status === 'completed',
+        budget_forecasted: report?.budget_forecasted === true,
+        budget_projections_updated: report?.budget_projections_updated === true,
+        budget_snapshots_taken: report?.budget_snapshots_taken === true,
+        budget_sent_to_erp: report?.budget_sent_to_erp === true,
+      }))(flowByProject.get(projectId)),
+    }
+  })
 
   return { view, columns, rows }
 }

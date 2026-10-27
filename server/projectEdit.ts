@@ -16,7 +16,8 @@ import {
   type SetupSelection,
 } from './initiation.js'
 import { selectAll } from './selectAll.js'
-import { insertTasks } from './tasks.js'
+import { insertTasks, isRealDate, meetingDateFields } from './tasks.js'
+import type { CadenceUnit } from '../shared/period.js'
 
 /**
  * Edit Project and Closeout Project: changes to a project AFTER it was initiated. Both follow the
@@ -49,6 +50,23 @@ export interface CloseoutCatalogItem {
   dueDate: string | null
 }
 
+/** What the Edit modal's Dates tab shows and can change (see EditDatesPayload). */
+export interface EditDatesCatalog {
+  /** One row per meeting task — editable even when complete. */
+  meetings: { taskId: string; itemId: string; name: string; complete: boolean; dueDate: string | null; meetingDate: string | null }[]
+  /** One row per included recurring item: its current (earliest) open instance. */
+  recurring: {
+    taskId: string
+    itemId: string
+    name: string
+    dueDate: string | null
+    cadenceValue: number
+    cadenceUnit: CadenceUnit
+  }[]
+  /** One row per closeout task (only once closeout has started); complete ones are read-only. */
+  closeout: { taskId: string; itemId: string; name: string; complete: boolean; dueDate: string | null }[]
+}
+
 export interface ProjectEditCatalog {
   project: {
     id: string
@@ -58,16 +76,24 @@ export interface ProjectEditCatalog {
     apm_id: string | null
   }
   items: EditCatalogItem[]
-  /** The project's existing open Setup due date ("Setup complete by"), to prefill added Setup items. */
+  /**
+   * The project's existing open Setup due date ("Setup complete by"): prefills added Setup items and is
+   * the Dates tab's field. null = no open Setup tasks (the field is hidden).
+   */
   setupDueDate: string | null
   closeout: CloseoutCatalogItem[]
+  dates: EditDatesCatalog
 }
 
 interface ChecklistTaskRow {
+  id: string
   checklist_item_id: string
   status: string
   source_category: string
   due_date: string | null
+  meeting_date: string | null
+  cadence_value: number | null
+  cadence_unit: CadenceUnit | null
 }
 
 async function loadProject(admin: SupabaseClient, projectId: string) {
@@ -86,7 +112,7 @@ async function loadChecklistTasks(admin: SupabaseClient, projectId: string): Pro
     () =>
       admin
         .from('tasks')
-        .select('checklist_item_id, status, source_category, due_date')
+        .select('id, checklist_item_id, status, source_category, due_date, meeting_date, cadence_value, cadence_unit')
         .eq('project_id', projectId)
         .not('checklist_item_id', 'is', null)
         .order('id') as never,
@@ -157,7 +183,56 @@ export async function getProjectEditCatalog(admin: SupabaseClient, projectId: st
       }
     })
 
-  return { project, items, setupDueDate: openSetupDates[0] ?? null, closeout }
+  const byOrder = <T extends { sort_order: number }>(a: T, b: T) => a.sort_order - b.sort_order
+  const dates: EditDatesCatalog = {
+    meetings: all
+      .filter((i) => i.phase === 'setup' && i.is_meeting)
+      .sort(byOrder)
+      .flatMap((item) => {
+        const task = tasksOf(item.id, 'setup')[0]
+        return task
+          ? [{
+              taskId: task.id,
+              itemId: item.id,
+              name: item.name,
+              complete: task.status === 'complete',
+              dueDate: task.due_date,
+              meetingDate: task.meeting_date,
+            }]
+          : []
+      }),
+    recurring: all
+      .filter((i) => i.phase === 'recurring')
+      .sort(byOrder)
+      .flatMap((item) => {
+        // The current instance is the earliest open one (a new cycle only exists once the last is done).
+        const current = tasksOf(item.id, 'recurring')
+          .filter((t) => t.status !== 'complete')
+          .sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))[0]
+        return current && current.cadence_value && current.cadence_unit
+          ? [{
+              taskId: current.id,
+              itemId: item.id,
+              name: item.name,
+              dueDate: current.due_date,
+              cadenceValue: current.cadence_value,
+              cadenceUnit: current.cadence_unit,
+            }]
+          : []
+      }),
+    closeout: all
+      .filter((i) => i.phase === 'closeout' && i.project_id === null)
+      .sort(byOrder)
+      .flatMap((item) => {
+        const mine = tasksOf(item.id, 'closeout')
+        const task = mine.find((t) => t.status !== 'complete') ?? mine[0]
+        return task
+          ? [{ taskId: task.id, itemId: item.id, name: item.name, complete: task.status === 'complete', dueDate: task.due_date }]
+          : []
+      }),
+  }
+
+  return { project, items, setupDueDate: openSetupDates[0] ?? null, closeout, dates }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -205,6 +280,18 @@ async function currentAssignees(admin: SupabaseClient, projectId: string): Promi
 // Edit Project
 // ---------------------------------------------------------------------------------------------
 
+/** Date changes from the Dates tab. Only what changed is sent; every list may be empty. */
+export interface EditDatesPayload {
+  /** New due date for every open Setup task (meetings included). */
+  setupDueDate?: string
+  /** A meeting's date: set completes it, null reopens it. */
+  meetings: { taskId: string; meetingDate: string | null }[]
+  /** A recurring item's current open instance: its next due date and/or its cadence. */
+  recurring: { taskId: string; dueDate?: string; cadenceValue?: number; cadenceUnit?: CadenceUnit }[]
+  /** Open closeout tasks' due dates. */
+  closeout: { taskId: string; dueDate: string }[]
+}
+
 export interface EditProjectPayload {
   projectId: string
   /** Undefined = leave as is; null = clear. */
@@ -215,6 +302,57 @@ export interface EditProjectPayload {
   /** Newly (re)included items with what the wizard would have asked for them. */
   addSetup: SetupSelection[]
   addRecurring: RecurringSelection[]
+  dates: EditDatesPayload
+}
+
+function parseDatesPayload(value: unknown): EditDatesPayload {
+  const raw = (value ?? {}) as Record<string, unknown>
+  const rows = (key: string): Record<string, unknown>[] => {
+    if (raw[key] === undefined) return []
+    if (!Array.isArray(raw[key])) throw new InitiationError(`"dates.${key}" must be an array`)
+    return raw[key] as Record<string, unknown>[]
+  }
+  const realDate = (v: unknown, where: string): string => {
+    if (typeof v !== 'string' || !isRealDate(v)) throw new InitiationError(`${where}: must be a real date (YYYY-MM-DD)`)
+    return v
+  }
+  const taskId = (row: Record<string, unknown>, where: string): string => {
+    const id = asString(row?.taskId)
+    if (!id) throw new InitiationError(`${where}: "taskId" is required`)
+    return id
+  }
+
+  const setupDueDate = raw.setupDueDate === undefined ? undefined : realDate(raw.setupDueDate, 'dates.setupDueDate')
+  const meetings = rows('meetings').map((row, i) => ({
+    taskId: taskId(row, `dates.meetings[${i}]`),
+    meetingDate: row.meetingDate === null ? null : realDate(row.meetingDate, `dates.meetings[${i}].meetingDate`),
+  }))
+  const recurring = rows('recurring').map((row, i) => {
+    const where = `dates.recurring[${i}]`
+    const out: EditDatesPayload['recurring'][number] = { taskId: taskId(row, where) }
+    if (row.dueDate !== undefined) out.dueDate = realDate(row.dueDate, `${where}.dueDate`)
+    if (row.cadenceValue !== undefined || row.cadenceUnit !== undefined) {
+      const { cadenceValue, cadenceUnit } = row
+      if (typeof cadenceValue !== 'number' || !Number.isInteger(cadenceValue) || cadenceValue <= 0) {
+        throw new InitiationError(`${where}: the cadence must be a positive whole number`)
+      }
+      if (cadenceUnit !== 'day' && cadenceUnit !== 'week' && cadenceUnit !== 'month') {
+        throw new InitiationError(`${where}: "cadenceUnit" must be day, week, or month`)
+      }
+      out.cadenceValue = cadenceValue
+      out.cadenceUnit = cadenceUnit
+    }
+    return out
+  })
+  const closeout = rows('closeout').map((row, i) => ({
+    taskId: taskId(row, `dates.closeout[${i}]`),
+    dueDate: realDate(row.dueDate, `dates.closeout[${i}].dueDate`),
+  }))
+  return { setupDueDate, meetings, recurring, closeout }
+}
+
+function hasDateEdits(d: EditDatesPayload): boolean {
+  return d.setupDueDate !== undefined || d.meetings.length + d.recurring.length + d.closeout.length > 0
 }
 
 export function parseEditPayload(body: unknown): EditProjectPayload {
@@ -241,7 +379,97 @@ export function parseEditPayload(body: unknown): EditProjectPayload {
   if ([...addSetup, ...addRecurring].some((s) => !s.itemId)) {
     throw new InitiationError('Only existing checklist items can be added to a project here')
   }
-  return { projectId, pmId: person('pmId'), apmId: person('apmId'), removeItemIds, addSetup, addRecurring }
+  return {
+    projectId,
+    pmId: person('pmId'),
+    apmId: person('apmId'),
+    removeItemIds,
+    addSetup,
+    addRecurring,
+    dates: parseDatesPayload(raw.dates),
+  }
+}
+
+/**
+ * Writes the Dates tab's changes. Only rows whose value really differs are written; completed tasks are
+ * never touched (except a meeting's date, which also moves a completed meeting). `removedItemIds` are the
+ * items this same edit takes off the project — their tasks are gone, so their date edits are skipped.
+ */
+async function applyDateEdits(
+  admin: SupabaseClient,
+  projectId: string,
+  dates: EditDatesPayload,
+  current: EditDatesCatalog,
+  removedItemIds: Set<string>,
+): Promise<void> {
+  const update = async (taskId: string, fields: Record<string, unknown>) => {
+    const { error } = await admin.from('tasks').update(fields).eq('id', taskId)
+    if (error) throw new Error(error.message)
+  }
+
+  if (dates.setupDueDate !== undefined) {
+    const { error } = await admin
+      .from('tasks')
+      .update({ due_date: dates.setupDueDate })
+      .eq('project_id', projectId)
+      .eq('source_category', 'setup')
+      .neq('status', 'complete')
+      .or(`due_date.is.null,due_date.neq.${dates.setupDueDate}`)
+    if (error) throw new Error(error.message)
+  }
+
+  const meetingsById = new Map(current.meetings.map((m) => [m.taskId, m]))
+  const changedMeetings = dates.meetings.filter((m) => {
+    const was = meetingsById.get(m.taskId)
+    return was && !removedItemIds.has(was.itemId) && was.meetingDate !== m.meetingDate
+  })
+  if (changedMeetings.length > 0) {
+    const { data, error } = await admin
+      .from('tasks')
+      .select('id, completed_at')
+      .in('id', changedMeetings.map((m) => m.taskId))
+    if (error) throw new Error(error.message)
+    const completedAt = new Map((data ?? []).map((r) => [r.id as string, r.completed_at as string | null]))
+    for (const m of changedMeetings) {
+      await update(m.taskId, meetingDateFields(m.meetingDate, completedAt.get(m.taskId) ?? null))
+    }
+  }
+
+  const recurringById = new Map(current.recurring.map((r) => [r.taskId, r]))
+  for (const edit of dates.recurring) {
+    const was = recurringById.get(edit.taskId)
+    if (!was || removedItemIds.has(was.itemId)) continue
+    const fields: Record<string, unknown> = {}
+    if (edit.dueDate !== undefined && edit.dueDate !== was.dueDate) fields.due_date = edit.dueDate
+    const cadenceChanged =
+      edit.cadenceValue !== undefined && (edit.cadenceValue !== was.cadenceValue || edit.cadenceUnit !== was.cadenceUnit)
+    if (cadenceChanged) {
+      fields.cadence_value = edit.cadenceValue
+      fields.cadence_unit = edit.cadenceUnit
+    }
+    if (Object.keys(fields).length > 0) await update(edit.taskId, fields)
+    if (cadenceChanged) {
+      // Keep the saved config in step with the live task (it's what the item started from).
+      const { error } = await admin
+        .from('project_checklist_item_config')
+        .upsert(
+          {
+            project_id: projectId,
+            checklist_item_id: was.itemId,
+            cadence_value: edit.cadenceValue,
+            cadence_unit: edit.cadenceUnit,
+          },
+          { onConflict: 'project_id,checklist_item_id' },
+        )
+      if (error) throw new Error(error.message)
+    }
+  }
+
+  const closeoutById = new Map(current.closeout.map((c) => [c.taskId, c]))
+  for (const edit of dates.closeout) {
+    const was = closeoutById.get(edit.taskId)
+    if (was && was.dueDate !== edit.dueDate) await update(edit.taskId, { due_date: edit.dueDate })
+  }
 }
 
 /**
@@ -250,6 +478,8 @@ export function parseEditPayload(body: unknown): EditProjectPayload {
  *    closeout tasks (completed tasks are never touched).
  *  - removed items: Setup items whose task is complete are refused; the rest get an exclusion and lose
  *    their open task(s); a recurring item then can't spawn another instance.
+ *  - dates: re-dates the open Setup tasks, sets / clears meeting dates, moves a recurring item's open
+ *    instance and cadence, and moves open closeout tasks (see applyDateEdits).
  *  - added items: any exclusion is lifted and the task(s) are created exactly as initiation does, for
  *    the project's current PM/APM, with the editing user as `assigned_by`.
  * An uninitiated project can only have its PM / APM changed.
@@ -261,7 +491,9 @@ export async function editProject(
 ): Promise<{ added: number; removed: number }> {
   const { projectId } = payload
   const project = await loadProject(admin, projectId)
-  const wantsItems = payload.removeItemIds.length + payload.addSetup.length + payload.addRecurring.length > 0
+  const wantsItems =
+    payload.removeItemIds.length + payload.addSetup.length + payload.addRecurring.length > 0 ||
+    hasDateEdits(payload.dates)
   if (!project.initiated && wantsItems) {
     throw new InitiationError('This project has not been initiated yet — only its PM and APM can be changed')
   }
@@ -290,6 +522,24 @@ export async function editProject(
   checkSetupSelections(setupItems, payload.addSetup)
   checkRecurringSelections(recurringItems, payload.addRecurring)
 
+  // Date edits may only target this project's own tasks that the Dates tab can edit.
+  const { dates } = payload
+  if (dates.setupDueDate !== undefined && catalog.setupDueDate === null) {
+    throw new InitiationError('This project has no open Setup tasks to re-date')
+  }
+  const knownMeetings = new Set(catalog.dates.meetings.map((m) => m.taskId))
+  const knownRecurring = new Set(catalog.dates.recurring.map((r) => r.taskId))
+  const editableCloseout = new Set(catalog.dates.closeout.filter((c) => !c.complete).map((c) => c.taskId))
+  if (dates.meetings.some((m) => !knownMeetings.has(m.taskId))) {
+    throw new InitiationError('A meeting in this edit does not belong to this project')
+  }
+  if (dates.recurring.some((r) => !knownRecurring.has(r.taskId))) {
+    throw new InitiationError('A recurring item in this edit is not open on this project')
+  }
+  if (dates.closeout.some((c) => !editableCloseout.has(c.taskId))) {
+    throw new InitiationError('A closeout task in this edit is complete or does not belong to this project')
+  }
+
   // ---- write ----
   const personFields: { pm_id?: string | null; apm_id?: string | null } = {}
   if (payload.pmId !== undefined) personFields.pm_id = payload.pmId
@@ -300,6 +550,9 @@ export async function editProject(
   }
 
   await excludeItems(admin, projectId, toRemove)
+
+  // Before the additions below, so "Setup complete by" re-dates only the tasks that were already open.
+  await applyDateEdits(admin, projectId, dates, catalog.dates, new Set(toRemove))
 
   const addIds = [...setupItems, ...recurringItems].map((i) => i.id as string)
   if (addIds.length > 0) {

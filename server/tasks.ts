@@ -446,6 +446,20 @@ export function isRealDate(value: string): boolean {
 }
 
 /**
+ * The columns a meeting date sets: a date completes the task (keeping an existing completion time),
+ * clearing it reopens the task. Shared by the Tasks / Archive pages and the Edit Project modal.
+ */
+export function meetingDateFields(meetingDate: string | null, existingCompletedAt: string | null) {
+  return meetingDate !== null
+    ? {
+        meeting_date: meetingDate,
+        status: 'complete' as const,
+        completed_at: existingCompletedAt ?? new Date().toISOString(),
+      }
+    : { meeting_date: null, status: 'not_started' as const, completed_at: null }
+}
+
+/**
  * A meeting task is finished by entering the date it happens: that sets meeting_date and completes
  * the task. Clearing the date (null) reopens it. Any real date is accepted, including past ones.
  * due_date is left alone — it stays the project's "Setup complete by" date.
@@ -463,14 +477,7 @@ export async function setMeetingDate(
     throw new TaskRuleError('"meetingDate" must be a real date (YYYY-MM-DD) or null')
   }
 
-  const fields =
-    meetingDate !== null
-      ? {
-          meeting_date: meetingDate,
-          status: 'complete' as const,
-          completed_at: task.completed_at ?? new Date().toISOString(),
-        }
-      : { meeting_date: null, status: 'not_started' as const, completed_at: null }
+  const fields = meetingDateFields(meetingDate, task.completed_at)
   const { error } = await admin.from('tasks').update(fields).eq('id', taskId)
   if (error) throw new Error(error.message)
   return { ...task, ...fields }

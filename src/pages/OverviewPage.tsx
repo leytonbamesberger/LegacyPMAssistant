@@ -1,9 +1,10 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMsal } from '@azure/msal-react'
 import { useProject } from '../contexts/ProjectContext'
+import { localToday } from '../lib/dates'
 import { useProfile } from '../contexts/ProfileContext'
 import { useFlowReport } from '../contexts/FlowReportContext'
-import { fetchOverview, saveOverviewView, type OverviewData, type OverviewRow } from '../lib/overview'
+import { fetchOverview, saveOverviewView, type OverviewData, type OverviewMeeting, type OverviewRow } from '../lib/overview'
 import type { OverviewView } from '../../shared/overviewView'
 import { FLOW_BUDGET_ITEMS } from '../../shared/flowBudget'
 import type { Project } from '../lib/projects'
@@ -12,8 +13,9 @@ import { ProcoreEmptyState } from '../components/ProcoreEmptyState'
 import { OverviewViewPicker } from '../components/OverviewViewPicker'
 
 /**
- * A scannable checklist grid: one row per project in the user's view, one column per Setup / Recurring /
- * Closeout item (grouped by phase) plus the FLOW group. A cell is a box — nothing to click. Rows are
+ * A scannable checklist grid: one row per project in the user's view, one column per Setup / Meetings /
+ * Recurring / Closeout item (grouped by phase; always the whole catalog, plus any custom item a shown
+ * project has) plus the FLOW group. Meeting cells show the meeting's date, or TBD. A cell is a box — nothing to click. Rows are
  * grouped under their PM (projects with none under "Unassigned"), each group sorted by job number.
  * A project that hasn't been initiated yet gets a row too, below the initiated ones in its group, with
  * one merged cell (and an Initiate button) where its checklist cells would be; its FLOW cells are real.
@@ -96,11 +98,18 @@ export function OverviewPage() {
   }
 
   const setup = (data?.columns ?? []).filter((c) => c.phase === 'setup')
+  const meetings = (data?.columns ?? []).filter((c) => c.phase === 'meetings')
   const recurring = (data?.columns ?? []).filter((c) => c.phase === 'recurring')
   const closeout = (data?.columns ?? []).filter((c) => c.phase === 'closeout')
-  const columns = [...setup, ...recurring, ...closeout]
+  const columns = [...setup, ...meetings, ...recurring, ...closeout]
   // Where a column group begins (a heavier left border).
-  const groupStarts = new Set([0, setup.length, setup.length + recurring.length])
+  const groupStarts = new Set([
+    0,
+    setup.length,
+    setup.length + meetings.length,
+    setup.length + meetings.length + recurring.length,
+  ])
+  const today = localToday() // the browser's date decides upcoming vs past / late
   // With no initiated project there are no checklist columns, but the merged cell still needs one to span.
   const checklistSpan = Math.max(columns.length, 1)
 
@@ -154,6 +163,7 @@ export function OverviewPage() {
                   ) : (
                     <>
                       <PhaseHeader label="Setup" span={setup.length} />
+                      <PhaseHeader label="Meetings" span={meetings.length} />
                       <PhaseHeader label="Recurring" span={recurring.length} />
                       <PhaseHeader label="Closeout" span={closeout.length} />
                     </>
@@ -168,13 +178,19 @@ export function OverviewPage() {
                     <th
                       key={col.id}
                       title={col.name}
-                      className={`h-40 w-7 min-w-[1.75rem] border-b border-legacy-blue-light/25 bg-white p-0 align-bottom font-normal ${
-                        groupStarts.has(i) ? 'border-l-2 border-l-legacy-blue-dark/40' : ''
-                      }`}
+                      className={`h-40 border-b border-legacy-blue-light/25 bg-white align-bottom font-normal ${
+                        col.phase === 'meetings'
+                          ? 'w-[76px] min-w-[76px] max-w-[76px] px-1 pb-1.5 text-center leading-tight'
+                          : 'w-7 min-w-[1.75rem] p-0'
+                      } ${groupStarts.has(i) ? 'border-l-2 border-l-legacy-blue-dark/40' : ''}`}
                     >
-                      <div className="mx-auto rotate-180 whitespace-nowrap pt-1.5 text-left leading-7 [writing-mode:vertical-rl]">
-                        {col.name}
-                      </div>
+                      {col.phase === 'meetings' ? (
+                        col.name
+                      ) : (
+                        <div className="mx-auto rotate-180 whitespace-nowrap pt-1.5 text-left leading-7 [writing-mode:vertical-rl]">
+                          {col.name}
+                        </div>
+                      )}
                     </th>
                   ))}
                   {FLOW_COLUMNS.map((col, i) => (
@@ -227,14 +243,24 @@ export function OverviewPage() {
                             columns.length === 0 ? (
                               <td />
                             ) : (
-                              columns.map((col, i) => (
-                                <Cell
-                                  key={col.id}
-                                  state={na.has(col.id) ? 'na' : done.has(col.id) ? 'done' : 'open'}
-                                  groupStart={groupStarts.has(i)}
-                                  label={`${label(row.project_id)}: ${col.name}`}
-                                />
-                              ))
+                              columns.map((col, i) =>
+                                col.phase === 'meetings' ? (
+                                  <MeetingCell
+                                    key={col.id}
+                                    meeting={na.has(col.id) ? undefined : row.meetings[col.id]}
+                                    today={today}
+                                    groupStart={groupStarts.has(i)}
+                                    label={`${label(row.project_id)}: ${col.name}`}
+                                  />
+                                ) : (
+                                  <Cell
+                                    key={col.id}
+                                    state={na.has(col.id) ? 'na' : done.has(col.id) ? 'done' : 'open'}
+                                    groupStart={groupStarts.has(i)}
+                                    label={`${label(row.project_id)}: ${col.name}`}
+                                  />
+                                ),
+                              )
                             )
                           ) : (
                             <td
@@ -288,6 +314,15 @@ export function OverviewPage() {
   )
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** "Oct 21", or "Oct 21 '27" when the year isn't the current one. */
+function shortDate(iso: string, today: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const text = `${MONTHS[m - 1]} ${d}`
+  return y === Number(today.slice(0, 4)) ? text : `${text} '${String(y).slice(-2)}`
+}
+
 function PhaseHeader({ label, span }: { label: string; span: number }) {
   if (span === 0) return null
   return (
@@ -306,7 +341,17 @@ type CellState = 'done' | 'open' | 'na'
  * A read-only box, nothing to click: checked = complete, empty = applies but not
  * complete, grayed out = doesn't apply to this project.
  */
-function Cell({ state, groupStart, label }: { state: CellState; groupStart: boolean; label: string }) {
+function Cell({
+  state,
+  groupStart,
+  label,
+  wide = false,
+}: {
+  state: CellState
+  groupStart: boolean
+  label: string
+  wide?: boolean // a Meetings-column cell: the wider width
+}) {
   const box =
     state === 'done'
       ? 'border-legacy-blue-dark bg-legacy-blue-dark text-white'
@@ -315,7 +360,9 @@ function Cell({ state, groupStart, label }: { state: CellState; groupStart: bool
         : 'border-legacy-blue-light/20 bg-legacy-blue-light/15'
   return (
     <td
-      className={`h-7 w-7 min-w-[1.75rem] border-b border-legacy-blue-light/15 text-center ${
+      className={`h-7 border-b border-legacy-blue-light/15 text-center ${
+        wide ? 'w-[76px] min-w-[76px] max-w-[76px]' : 'w-7 min-w-[1.75rem]'
+      } ${
         groupStart ? 'border-l-2 border-l-legacy-blue-dark/40' : 'border-l border-l-legacy-blue-light/10'
       }`}
     >
@@ -329,6 +376,49 @@ function Cell({ state, groupStart, label }: { state: CellState; groupStart: bool
       >
         {state === 'done' ? '✓' : ''}
       </span>
+    </td>
+  )
+}
+
+/**
+ * A read-only Meetings cell: the meeting's date (blue when today or later, gray once past), "TBD" while
+ * it is still open (red when late), a check when it was marked Done with no date, or a disabled box
+ * when the project has no task for the meeting.
+ */
+function MeetingCell({
+  meeting,
+  today,
+  groupStart,
+  label,
+}: {
+  meeting: OverviewMeeting | undefined
+  today: string
+  groupStart: boolean
+  label: string
+}) {
+  if (!meeting) return <Cell state="na" groupStart={groupStart} label={label} wide />
+  const complete = meeting.status === 'complete'
+  if (complete && !meeting.meeting_date) return <Cell state="done" groupStart={groupStart} label={label} wide />
+  let content: ReactNode
+  if (complete && meeting.meeting_date) {
+    const upcoming = meeting.meeting_date >= today
+    content = (
+      <span className={`font-medium ${upcoming ? 'text-legacy-blue-dark' : 'text-legacy-blue-light'}`}>
+        {shortDate(meeting.meeting_date, today)}
+      </span>
+    )
+  } else {
+    const late = !!meeting.due_date && meeting.due_date < today
+    content = <span className={late ? 'font-medium text-legacy-red' : 'text-legacy-blue-dark/70'}>TBD</span>
+  }
+  return (
+    <td
+      aria-label={label}
+      className={`h-7 w-[76px] min-w-[76px] max-w-[76px] whitespace-nowrap border-b border-legacy-blue-light/15 px-1 text-center ${
+        groupStart ? 'border-l-2 border-l-legacy-blue-dark/40' : 'border-l border-l-legacy-blue-light/10'
+      }`}
+    >
+      {content}
     </td>
   )
 }
