@@ -1,5 +1,5 @@
 import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
-import { apiFetch, getIdToken } from './apiClient'
+import { apiFetch, authedFetch } from './apiClient'
 import type { CadenceUnit } from '../../shared/period'
 
 export interface InitiationCatalogItem {
@@ -76,15 +76,13 @@ export async function initiateProject(
   account: AccountInfo,
   payload: InitiationPayload,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const idToken = await getIdToken(instance, account)
-  if (!idToken) return { ok: false, error: 'Could not verify your sign-in — try again' }
-
   try {
-    const res = await fetch('/api/projects', {
+    const res = await authedFetch(instance, account, '/api/projects', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', Authorization: `Bearer ${idToken}` },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'initiate', ...payload }),
     })
+    if (!res) return { ok: false, error: 'Could not verify your sign-in — try again' }
     if (res.ok) return { ok: true }
     const body = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
     const message = body?.error ?? `Request failed (${res.status})`

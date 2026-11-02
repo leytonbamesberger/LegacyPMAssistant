@@ -1,5 +1,5 @@
 import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
-import { apiFetch, getIdToken } from './apiClient'
+import { apiFetch, authedFetch } from './apiClient'
 import type { CadenceUnit } from '../../shared/period'
 import type { RecurringSelection, SetupSelection } from './initiation'
 
@@ -211,14 +211,13 @@ async function postProjectAction(
   account: AccountInfo,
   body: Record<string, unknown>,
 ): Promise<ActionResult> {
-  const idToken = await getIdToken(instance, account)
-  if (!idToken) return { ok: false, error: 'Could not verify your sign-in — try again' }
   try {
-    const res = await fetch('/api/projects', {
+    const res = await authedFetch(instance, account, '/api/projects', {
       method: 'POST',
-      headers: { 'content-type': 'application/json', Authorization: `Bearer ${idToken}` },
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     })
+    if (!res) return { ok: false, error: 'Could not verify your sign-in — try again' }
     if (res.ok) return { ok: true }
     const err = (await res.json().catch(() => null)) as { error?: string; detail?: string } | null
     const message = err?.error ?? `Request failed (${res.status})`
