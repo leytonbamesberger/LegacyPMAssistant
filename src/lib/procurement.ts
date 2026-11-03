@@ -34,6 +34,9 @@ export type ProcurementItemFields = Partial<
   Omit<ProcurementItem, 'id' | 'project_id' | 'created_at' | 'sort_order'>
 >
 
+/** One row of an import: a Description plus whichever fields the sheet had. */
+export type ImportItemInput = Pick<ProcurementItem, 'description'> & ProcurementItemFields
+
 export interface LinkedTask {
   id: string
   title: string
@@ -156,6 +159,35 @@ export async function createProcurementItem(
     description,
   })
   return body?.item ?? null
+}
+
+/** One project's current items (it may not be in the user's view) — for the import's duplicate check. Null on failure. */
+export async function fetchProjectProcurementItems(
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  projectId: string,
+): Promise<ProcurementItem[] | null> {
+  const body = await apiFetch<{ items: ProcurementItem[] }>(
+    instance,
+    account,
+    `/api/projects?procurementItemsFor=${encodeURIComponent(projectId)}`,
+  )
+  return body?.items ?? null
+}
+
+/** Adds many items to a project at once (an Excel import the user confirmed). Null when nothing was saved. */
+export async function importProcurementItems(
+  instance: IPublicClientApplication,
+  account: AccountInfo,
+  projectId: string,
+  items: ImportItemInput[],
+): Promise<ProcurementItem[] | null> {
+  const body = await post<{ items: ProcurementItem[] }>(instance, account, {
+    action: 'procurement-import',
+    projectId,
+    items,
+  })
+  return body?.items ?? null
 }
 
 /** Saves the changed fields of one item; returns the stored row, or null when the save failed. */

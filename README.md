@@ -342,7 +342,7 @@ api/                   thin Vercel adapters (12 of 12 files — Hobby plan caps 
               Project modals; POST dispatches on body.action: 'sync' | 'star' |
               'update' | 'initiate' | 'edit-project' | 'closeout' | 'overview-view' |
               'procurement-view' | 'procurement-collapsed' | 'procurement-create' |
-              'procurement-update' | 'procurement-delete')
+              'procurement-import' | 'procurement-update' | 'procurement-delete')
   flow-reports.ts (GET this month's status; POST dispatches on body.action:
                    'save' | 'submit')
   tasks.ts (GET tasks visible to caller, filtered by projectId/assigneeId/
@@ -375,7 +375,7 @@ server/                framework-agnostic handlers + logic
                        Edit Project's change of salesman (moves / leaves the open task)
   procurement.ts       the Procurement log: the per-user view (profiles.procurement_view) and
                        collapsed groups, items per project, the open tasks linked to each
-                       (only ones the caller can see), and item create/update/delete
+                       (only ones the caller can see), and item create/update/delete/bulk import
   projectEdit.ts       Edit Project (PM/APM, add/remove Setup + Recurring items) and
                        Closeout Project (closeout tasks, stop recurring, status 'closing')
   selectAll.ts         .range() paging helper — PostgREST silently truncates any

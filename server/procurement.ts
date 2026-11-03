@@ -244,3 +244,69 @@ export async function deleteProcurementItem(admin: SupabaseClient, itemId: unkno
   const { error } = await admin.from('procurement_items').delete().eq('id', itemId)
   if (error) throw new Error(error.message)
 }
+
+const MAX_IMPORT_ROWS = 1000
+
+/**
+ * Bulk-adds items read from a project's Excel sheet, after the user confirmed the preview. Every row goes
+ * through the same validation as a cell edit (Description required, real dates, whole-number lead time), and
+ * nothing is written unless all of them pass. They land at the bottom of the project's list, in sheet order.
+ */
+export async function importProcurementItems(
+  admin: SupabaseClient,
+  profileId: string,
+  projectId: unknown,
+  rawItems: unknown,
+): Promise<ProcurementItem[]> {
+  if (typeof projectId !== 'string' || !projectId) throw new TaskRuleError('"projectId" (string) is required')
+  if (!Array.isArray(rawItems) || rawItems.length === 0) throw new TaskRuleError('"items" (a non-empty array) is required')
+  if (rawItems.length > MAX_IMPORT_ROWS) throw new TaskRuleError(`Import at most ${MAX_IMPORT_ROWS} items at a time`)
+
+  const patches = rawItems.map((raw, i) => {
+    try {
+      return parseItemPatch(raw)
+    } catch (err) {
+      if (err instanceof TaskRuleError) throw new TaskRuleError(`Item ${i + 1}: ${err.message}`)
+      throw err
+    }
+  })
+
+  const { data: project, error: projectError } = await admin.from('projects').select('id').eq('id', projectId).maybeSingle()
+  if (projectError) throw new Error(projectError.message)
+  if (!project) throw new TaskRuleError('Project not found', 404)
+
+  const { data: last, error: lastError } = await admin
+    .from('procurement_items')
+    .select('sort_order')
+    .eq('project_id', projectId)
+    .order('sort_order', { ascending: false })
+    .limit(1)
+  if (lastError) throw new Error(lastError.message)
+  const base = (last?.[0]?.sort_order as number | null | undefined) ?? 0
+
+  const created: ProcurementItem[] = []
+  for (let i = 0; i < patches.length; i += 200) {
+    const rows = patches
+      .slice(i, i + 200)
+      .map((patch, j) => ({ ...patch, project_id: projectId, sort_order: base + i + j + 1, created_by: profileId }))
+    const { data, error } = await admin.from('procurement_items').insert(rows).select(ITEM_COLUMNS)
+    if (error) throw new Error(error.message)
+    created.push(...((data ?? []) as Record<string, unknown>[]).map(toItem))
+  }
+  return created
+}
+
+/** One project's items — the Excel import uses them to flag rows that are already in the log (the project may not be in the caller's view). */
+export async function getProjectProcurementItems(admin: SupabaseClient, projectId: string): Promise<ProcurementItem[]> {
+  const rows = await selectAll<Record<string, unknown>>(
+    () =>
+      admin
+        .from('procurement_items')
+        .select(ITEM_COLUMNS)
+        .eq('project_id', projectId)
+        .order('sort_order')
+        .order('created_at')
+        .order('id') as never,
+  )
+  return rows.map(toItem)
+}

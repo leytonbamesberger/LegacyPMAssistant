@@ -20,6 +20,7 @@ import {
 import { createTask, type NewTaskInput } from '../lib/tasks'
 import type { OverviewView } from '../../shared/overviewView'
 import { AddTaskModal } from '../components/AddTaskModal'
+import { ProcurementImportModal } from '../components/ProcurementImportModal'
 import { OverviewViewPicker } from '../components/OverviewViewPicker'
 import { ProcoreEmptyState } from '../components/ProcoreEmptyState'
 import {
@@ -75,6 +76,7 @@ export function ProcurementPage() {
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [highlightId, setHighlightId] = useState<string | null>(null)
   const [taskFor, setTaskFor] = useState<ProcurementItem | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const [jump, setJump] = useState<Jump | null>(null)
   const jumpBusy = useRef(false)
   const quickAddRefs = useRef(new Map<string, HTMLInputElement>())
@@ -202,6 +204,21 @@ export function ProcurementPage() {
     if (!ok) void load()
   }
 
+  // After an Excel import. A project already in the view just gets its new rows; any other project is added to
+  // the view (saved, like any view change) and the log reloaded, so the imported items are actually visible.
+  async function handleImported(projectId: string, created: ProcurementItem[]) {
+    if (!account || !data) return
+    if (data.projectIds.includes(projectId)) {
+      setData((prev) => prev && { ...prev, items: [...prev.items, ...created] })
+      return
+    }
+    await saveProcurementView(instance, account, {
+      ...data.view,
+      project_ids: [...data.view.project_ids, projectId],
+    })
+    await load()
+  }
+
   async function handleCreateTask(item: ProcurementItem, fields: NewTaskInput): Promise<boolean> {
     if (!account) return false
     const task = await createTask(instance, account, { ...fields, procurementItemId: item.id })
@@ -325,12 +342,21 @@ export function ProcurementPage() {
           </p>
         </div>
         {data && view && (
-          <OverviewViewPicker
-            view={view}
-            onChange={(next) => void handleViewChange(next)}
-            projects={projects}
-            directory={directory}
-          />
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <OverviewViewPicker
+              view={view}
+              onChange={(next) => void handleViewChange(next)}
+              projects={projects}
+              directory={directory}
+            />
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              className="rounded-md border border-legacy-blue-light/30 px-3 py-1.5 text-sm font-medium text-legacy-blue-dark hover:border-legacy-blue-dark"
+            >
+              Import from Excel
+            </button>
+          </div>
         )}
       </div>
 
@@ -400,6 +426,15 @@ export function ProcurementPage() {
           </>
         )}
       </div>
+
+      {importOpen && (
+        <ProcurementImportModal
+          projects={projects}
+          inView={new Set(data?.projectIds ?? [])}
+          onClose={() => setImportOpen(false)}
+          onImported={(projectId, created) => void handleImported(projectId, created)}
+        />
+      )}
 
       {taskFor && (
         <AddTaskModal

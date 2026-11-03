@@ -20,6 +20,8 @@ import {
   createProcurementItem,
   deleteProcurementItem,
   getProcurement,
+  getProjectProcurementItems,
+  importProcurementItems,
   saveProcurementCollapsed,
   saveProcurementView,
   updateProcurementItem,
@@ -62,14 +64,31 @@ async function loadProjectsResult(
  * Project modals need (see server/projectEdit.ts).
  *
  * GET /api/projects?procurement=1 instead returns the Procurement log for the caller's view (see
- * server/procurement.ts).
+ * server/procurement.ts); ?procurementItemsFor=<projectId> returns just that project's items.
  */
 export async function handleProjectsList(
   authorizationHeader: string | undefined,
-  query: { initiationCatalogFor?: string; overview?: string; editCatalogFor?: string; procurement?: string } = {},
+  query: {
+    initiationCatalogFor?: string
+    overview?: string
+    editCatalogFor?: string
+    procurement?: string
+    procurementItemsFor?: string
+  } = {},
 ): Promise<ApiResult> {
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
+
+  if (query.procurementItemsFor) {
+    try {
+      return { status: 200, json: { items: await getProjectProcurementItems(resolved.admin, query.procurementItemsFor) } }
+    } catch (err) {
+      return {
+        status: 500,
+        json: { error: 'Could not load the project’s items', detail: err instanceof Error ? err.message : String(err) },
+      }
+    }
+  }
 
   if (query.procurement) {
     try {
@@ -361,7 +380,7 @@ export async function handleProjectsUpdate(
 
 /**
  * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update' | 'initiate' | 'edit-project' | 'closeout' | 'overview-view'
- * | 'procurement-view' | 'procurement-collapsed' | 'procurement-create' | 'procurement-update' | 'procurement-delete', ... }.
+ * | 'procurement-view' | 'procurement-collapsed' | 'procurement-create' | 'procurement-import' | 'procurement-update' | 'procurement-delete', ... }.
  * One file/handler per verb regardless of action count, to stay well under
  * Vercel's Hobby-plan 12-Serverless-Function cap (see vercelAdapter.ts).
  */
@@ -393,6 +412,11 @@ export async function handleProjectsPost(
       return runProjectChange(authorizationHeader, 'add the item', async (admin, profileId) => {
         const { projectId, description } = body as { projectId?: unknown; description?: unknown }
         return { item: await createProcurementItem(admin, profileId, projectId, description) }
+      })
+    case 'procurement-import':
+      return runProjectChange(authorizationHeader, 'import the items', async (admin, profileId) => {
+        const { projectId, items } = body as { projectId?: unknown; items?: unknown }
+        return { items: await importProcurementItems(admin, profileId, projectId, items) }
       })
     case 'procurement-update':
       return runProjectChange(authorizationHeader, 'save the item', async (admin) => {
