@@ -1,17 +1,29 @@
 import { NavLink, useLocation } from 'react-router-dom'
+import { useProfile } from '../contexts/ProfileContext'
 
-const TABS = [
+const PM_TABS = [
   { to: '/organization/tasks', label: 'Tasks' },
   { to: '/organization/flow', label: 'FLOW' },
+  { to: '/organization/overview', label: 'Overview' },
+  { to: '/organization/procurement', label: 'Procurement' },
+]
+
+// Service users: Available Projects replaces FLOW, and there is no Procurement tab.
+const SERVICE_TABS = [
+  { to: '/organization/tasks', label: 'Tasks' },
+  { to: '/organization/available', label: 'Available Projects' },
   { to: '/organization/overview', label: 'Overview' },
 ]
 
 /**
- * Secondary nav row: the Tasks / FLOW / Overview tabs exist only under
+ * Secondary nav row: the Tasks / FLOW / Overview / Procurement tabs (Tasks / Available Projects / Overview for a
+ * Service user) exist only under
  * Organization — on any other section (Tools, ...) this renders nothing.
  */
 export function OrganizationTabs() {
   const { pathname } = useLocation()
+  const { profile } = useProfile()
+  const TABS = profile?.title === 'service' ? SERVICE_TABS : PM_TABS
   if (!pathname.startsWith('/organization')) return null
 
   return (

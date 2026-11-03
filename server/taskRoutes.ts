@@ -30,13 +30,13 @@ export interface TasksListQuery {
   assigneeId?: string
   /** 'open' (default), 'complete', or 'meeting' (every task with a meeting date, for the calendar). */
   status?: string
-  /** Comma-separated source categories: setup,recurring,closeout,flow. */
+  /** Comma-separated source categories: setup,recurring,closeout,service,flow. */
   categories?: string
   page?: string
   pageSize?: string
 }
 
-const SOURCE_CATEGORIES = ['setup', 'recurring', 'closeout', 'flow'] as const
+const SOURCE_CATEGORIES = ['setup', 'recurring', 'closeout', 'service', 'flow'] as const
 
 function positiveInt(raw: string | undefined): number | undefined {
   const n = Number(raw)
@@ -117,6 +117,7 @@ function parseTaskFields(body: unknown): { fields: NewTaskFields } | { error: Ap
     isRecurring?: unknown
     cadenceValue?: unknown
     cadenceUnit?: unknown
+    procurementItemId?: unknown
   }
   const bad = (error: string) => ({ error: { status: 400, json: { error } } as ApiResult })
 
@@ -138,6 +139,9 @@ function parseTaskFields(body: unknown): { fields: NewTaskFields } | { error: Ap
   }
   if (raw.notes !== undefined && raw.notes !== null && typeof raw.notes !== 'string') {
     return bad('"notes" must be a string or null')
+  }
+  if (raw.procurementItemId !== undefined && raw.procurementItemId !== null && typeof raw.procurementItemId !== 'string') {
+    return bad('"procurementItemId" must be a string or null')
   }
   if (typeof raw.dueDate !== 'string' || !isRealDate(raw.dueDate)) {
     return bad('A task needs a "dueDate" (YYYY-MM-DD)')
@@ -174,6 +178,7 @@ function parseTaskFields(body: unknown): { fields: NewTaskFields } | { error: Ap
       isRecurring,
       cadenceValue: isRecurring ? (raw.cadenceValue as number) : null,
       cadenceUnit: isRecurring ? (raw.cadenceUnit as CadenceUnit) : null,
+      procurementItemId: (raw.procurementItemId ?? null) as string | null,
     },
   }
 }

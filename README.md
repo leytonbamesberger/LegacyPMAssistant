@@ -117,7 +117,13 @@ Microsoft-token requests through our own `/api` routes," not as an RLS policy.)
 (data only — gives open manual tasks with no due date today's date; no schema change),
 [`008_overview_view_and_closeout.sql`](supabase/migrations/008_overview_view_and_closeout.sql)
 (idempotent — adds `profiles.overview_view`, allows `closeout` tasks; its last step, dropping
-`user_overview_projects`, is commented out for you to run after deploying).
+`user_overview_projects`, is commented out for you to run after deploying),
+[`009_procurement.sql`](supabase/migrations/009_procurement.sql)
+(idempotent — adds `procurement_items`, `tasks.procurement_item_id`, and the per-user
+`profiles.procurement_view` / `procurement_collapsed`),
+[`010_service_role.sql`](supabase/migrations/010_service_role.sql)
+(idempotent — allows the `service` role in `profiles.title` and `service` in
+`tasks.source_category`, adds `projects.service_id`).
 
 `schema.sql` is a clean snapshot of the live database for a **fresh** project; it is
 not a history and must not be re-run against live data.
@@ -331,10 +337,12 @@ api/                   thin Vercel adapters (12 of 12 files — Hobby plan caps 
     authorize.ts  callback.ts  status.ts  disconnect.ts
   projects/
     index.ts (GET /api/projects, or ?initiationCatalogFor=<id> for the wizard's
-              checklist, ?overview=1 for the Overview grid, or ?editCatalogFor=<id>
-              for the Edit / Closeout Project modals; POST dispatches on
-              body.action: 'sync' | 'star' | 'update' | 'initiate' |
-              'edit-project' | 'closeout' | 'overview-view')
+              checklist, ?overview=1 for the Overview grid, ?procurement=1 for the
+              Procurement log, or ?editCatalogFor=<id> for the Edit / Closeout
+              Project modals; POST dispatches on body.action: 'sync' | 'star' |
+              'update' | 'initiate' | 'edit-project' | 'closeout' | 'overview-view' |
+              'procurement-view' | 'procurement-collapsed' | 'procurement-create' |
+              'procurement-update' | 'procurement-delete')
   flow-reports.ts (GET this month's status; POST dispatches on body.action:
                    'save' | 'submit')
   tasks.ts (GET tasks visible to caller, filtered by projectId/assigneeId/
@@ -362,6 +370,12 @@ server/                framework-agnostic handlers + logic
   overview.ts          the Overview grid: the per-user "Choose a View" selection
                        (profiles.overview_view: Added / PMs / picked projects) and
                        which checklist + closeout cells show a check — read off `tasks`
+  service.ts           a project's service salesman (projects.service_id): the Service Add claim
+                       (one conditional update, then the "Meet with owner/client" task) and
+                       Edit Project's change of salesman (moves / leaves the open task)
+  procurement.ts       the Procurement log: the per-user view (profiles.procurement_view) and
+                       collapsed groups, items per project, the open tasks linked to each
+                       (only ones the caller can see), and item create/update/delete
   projectEdit.ts       Edit Project (PM/APM, add/remove Setup + Recurring items) and
                        Closeout Project (closeout tasks, stop recurring, status 'closing')
   selectAll.ts         .range() paging helper — PostgREST silently truncates any

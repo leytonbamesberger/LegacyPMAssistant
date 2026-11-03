@@ -22,7 +22,8 @@ export async function syncGeneratedTaskAssignees(admin: SupabaseClient, projectI
     .from('tasks')
     .select('id')
     .eq('project_id', projectId)
-    .not('source_category', 'is', null)
+    // Setup / Recurring / Closeout only: a project's service task follows its service salesman, not its PM/APM.
+    .in('source_category', ['setup', 'recurring', 'closeout'])
     .neq('status', 'complete')
   if (error) throw new Error(error.message)
   const taskIds = (tasks ?? []).map((t) => t.id as string)

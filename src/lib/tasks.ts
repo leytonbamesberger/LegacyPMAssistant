@@ -4,7 +4,7 @@ import type { CadenceUnit } from '../../shared/period'
 
 export type { CadenceUnit }
 export type TaskStatus = 'not_started' | 'in_progress' | 'complete'
-export type TaskSourceCategory = 'setup' | 'recurring' | 'closeout' | 'flow'
+export type TaskSourceCategory = 'setup' | 'recurring' | 'closeout' | 'service' | 'flow'
 
 export interface Task {
   id: string
@@ -32,6 +32,10 @@ export interface Task {
   is_meeting: boolean
   /** Meeting tasks: the date the meeting is/was held. Entering one completes the task and puts it on the calendar. */
   meeting_date: string | null
+  /** The procurement item this task follows up on, if any. */
+  procurement_item_id: string | null
+  /** That item's description and project (for the chip that jumps to it); null when there is none. */
+  procurement_item: { description: string; project_id: string } | null
   assignee_ids: string[]
 }
 
@@ -48,6 +52,8 @@ export interface NewTaskInput {
   isRecurring: boolean
   cadenceValue: number | null
   cadenceUnit: CadenceUnit | null
+  /** Set only when creating a task from a procurement item; an edit never changes the link. */
+  procurementItemId?: string | null
 }
 
 export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {

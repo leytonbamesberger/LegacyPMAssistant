@@ -1,11 +1,14 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { HideFromService, ServiceOnly } from './components/RoleRoutes'
 import { ArchivePage } from './pages/ArchivePage'
+import { AvailableProjectsPage } from './pages/AvailableProjectsPage'
 import { ExportFlowReports } from './pages/ExportFlowReports'
 import { FlowPage } from './pages/FlowPage'
 import { Home } from './pages/Home'
 import { Login } from './pages/Login'
 import { OverviewPage } from './pages/OverviewPage'
+import { ProcurementPage } from './pages/ProcurementPage'
 import { SubmittalChecker } from './pages/SubmittalChecker'
 import { SHOW_TOOLS_TAB } from './lib/features'
 import { TasksPage } from './pages/TasksPage'
@@ -24,9 +27,11 @@ export default function App() {
         <Route element={<ProtectedRoute />}>
           <Route path="/organization/tasks" element={<TasksPage />} />
           <Route path="/organization/tasks/archive" element={<ArchivePage />} />
-          <Route path="/organization/flow" element={<FlowPage />} />
+          <Route path="/organization/flow" element={<HideFromService><FlowPage /></HideFromService>} />
+          <Route path="/organization/available" element={<ServiceOnly><AvailableProjectsPage /></ServiceOnly>} />
           <Route path="/organization/overview" element={<OverviewPage />} />
-          <Route path="/organization/export" element={<ExportFlowReports />} />
+          <Route path="/organization/procurement" element={<HideFromService><ProcurementPage /></HideFromService>} />
+          <Route path="/organization/export" element={<HideFromService><ExportFlowReports /></HideFromService>} />
           {SHOW_TOOLS_TAB && <Route path="/tools" element={<Home />} />}
           {SHOW_TOOLS_TAB && <Route path="/tools/submittal-checker" element={<SubmittalChecker />} />}
         </Route>

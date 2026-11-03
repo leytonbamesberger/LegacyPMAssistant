@@ -88,9 +88,12 @@ export function buildTaskRows(
   const { today, showUpcoming, projectName, flow } = options
   const cutoff = addDaysISO(today, WINDOW_DAYS)
   const inWindow = (due: string | null) => due !== null && due <= cutoff
+  // A task with no due date is "upcoming" and never windowed in — except a service task ("Meet with owner/client"
+  // can be created without a date), which must not be hidden: it shows after the dated tasks.
+  const isShown = (t: Task) => (t.due_date === null ? t.source_category === 'service' : inWindow(t.due_date))
 
-  const visible = showUpcoming ? tasks : tasks.filter((t) => inWindow(t.due_date))
-  const upcomingCount = tasks.length - tasks.filter((t) => inWindow(t.due_date)).length
+  const visible = showUpcoming ? tasks : tasks.filter(isShown)
+  const upcomingCount = tasks.length - tasks.filter(isShown).length
 
   const rows: TaskListRow[] = []
   const grouped = new Set<string>()

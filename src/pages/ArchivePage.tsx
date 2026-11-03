@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMsal } from '@azure/msal-react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useProject } from '../contexts/ProjectContext'
 import { useProfile } from '../contexts/ProfileContext'
 import {
@@ -13,6 +13,7 @@ import {
   type Task,
   type TaskStatus,
 } from '../lib/tasks'
+import { openProcurementItem } from '../lib/procurement'
 import { AddTaskModal } from '../components/AddTaskModal'
 import { NO_TASK_FILTERS, TaskFilters, type TaskFilterState } from '../components/TaskFilters'
 import { TaskTable } from '../components/TaskTable'
@@ -26,6 +27,7 @@ export function ArchivePage() {
   const account = accounts[0]
   const { projects } = useProject()
   const { profile, directory, nameFor } = useProfile()
+  const navigate = useNavigate()
 
   const [filters, setFilters] = useState<TaskFilterState>(NO_TASK_FILTERS)
   const [page, setPage] = useState(1)
@@ -123,6 +125,7 @@ export function ArchivePage() {
           projects={projects}
           directory={directory}
           showFlow={false}
+          allowedCategories={profile?.title === 'service' ? ['service'] : undefined}
         />
       </div>
 
@@ -141,6 +144,7 @@ export function ArchivePage() {
           onSaveNotes={handleSaveNotes}
           onEdit={setEditingTask}
           onMeetingDate={(task, date) => void handleMeetingDate(task, date)}
+          onOpenProcurementItem={(task) => openProcurementItem(navigate, task)}
         />
       </div>
 

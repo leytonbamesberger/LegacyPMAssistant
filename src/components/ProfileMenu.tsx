@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMsal } from '@azure/msal-react'
 import { ProcoreConnectionItem } from './ProcoreConnectionItem'
 import { useProfile } from '../contexts/ProfileContext'
+import { PROFILE_TITLES, type ProfileTitle } from '../../shared/roles'
 
 /**
  * Top-right profile element for the Home header: circular avatar placeholder +
@@ -102,26 +103,28 @@ export function ProfileMenu() {
   )
 }
 
-const TITLE_LABEL: Record<'pm' | 'apm', string> = {
+const TITLE_LABEL: Record<ProfileTitle, string> = {
   pm: 'Project Manager',
   apm: 'Assistant PM',
+  service: 'Service',
 }
 
 /**
- * Self-reported role, used only to feed the star -> auto-assign logic on
- * projects (see supabase/schema.sql) — not a permission tier. It's required: until it's set the
+ * Self-reported role: feeds the Add -> auto-assign logic on projects (PM / APM take that slot, Service claims
+ * the service salesman — see supabase/schema.sql) and decides which tabs and tasks the user sees. Switching it
+ * only affects future Adds; existing assignments are left alone. It's required: until it's set the
  * app shows the blocking RoleGate modal instead of any page, so this is where it's changed later.
  */
 function RoleMenuItem({
   title,
   onSetTitle,
 }: {
-  title: 'pm' | 'apm' | null
-  onSetTitle: (title: 'pm' | 'apm') => Promise<boolean>
+  title: ProfileTitle | null
+  onSetTitle: (title: ProfileTitle) => Promise<boolean>
 }) {
   const [saving, setSaving] = useState(false)
 
-  async function pick(next: 'pm' | 'apm') {
+  async function pick(next: ProfileTitle) {
     if (next === title || saving) return
     setSaving(true)
     await onSetTitle(next)
@@ -136,8 +139,8 @@ function RoleMenuItem({
       <p className="mb-1.5 text-xs font-medium text-legacy-blue-light">
         {title === null ? 'Set your role to continue' : 'Your role'}
       </p>
-      <div className="flex gap-1.5">
-        {(['pm', 'apm'] as const).map((option) => (
+      <div className="flex flex-wrap gap-1.5">
+        {PROFILE_TITLES.map((option) => (
           <button
             key={option}
             type="button"

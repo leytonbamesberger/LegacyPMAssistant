@@ -17,6 +17,8 @@ export interface Project {
   status: 'active' | 'closing' | 'closed'
   pm_id: string | null
   apm_id: string | null
+  /** The project's service salesman (at most one). */
+  service_id: string | null
   checklist_enabled: boolean
   /** Set once by the initiation wizard; gates Setup/Recurring tasks and Overview inclusion. */
   initiated: boolean
@@ -72,21 +74,25 @@ export async function syncProjects(
 /**
  * Stars/unstars a project. If the caller is a `pm`/`apm` and the project has
  * no pm_id/apm_id yet, this also claims that slot server-side (see
- * autoAssignOnStar in server/projects.ts) — re-fetch the project list
- * afterward to pick up any resulting pm_id/apm_id change.
+ * autoAssignOnStar in server/projects.ts); a `service` user's Add claims the
+ * service salesman slot instead (`claimed`, with `serviceDueDate` for the
+ * meet-the-owner task). Re-fetch the project list afterward to pick up any
+ * resulting pm_id/apm_id/service_id change.
  */
 export async function setProjectStarred(
   instance: IPublicClientApplication,
   account: AccountInfo,
   projectId: string,
   starred: boolean,
-): Promise<boolean> {
-  const body = await postProjectsAction<{ starred: boolean }>(instance, account, {
+  serviceDueDate: string | null = null,
+): Promise<{ ok: boolean; claimed: boolean }> {
+  const body = await postProjectsAction<{ starred: boolean; claimed?: boolean }>(instance, account, {
     action: 'star',
     projectId,
     starred,
+    serviceDueDate,
   })
-  return body?.starred === starred
+  return { ok: body?.starred === starred, claimed: body?.claimed === true }
 }
 
 /** Edits gc/status/pm_id/apm_id/checklist_enabled on an existing project. */
@@ -142,6 +148,7 @@ export interface ProjectEditCatalog {
     status: 'active' | 'closing' | 'closed'
     pm_id: string | null
     apm_id: string | null
+    service_id: string | null
   }
   items: EditCatalogItem[]
   /** Existing open Setup due date ("Setup complete by"): prefills items added later; null = no open Setup tasks. */
@@ -187,6 +194,10 @@ export interface EditProjectPayload {
   /** Omitted = unchanged; null = cleared. */
   pmId?: string | null
   apmId?: string | null
+  /** The service salesman (omitted = unchanged; null = cleared). */
+  serviceId?: string | null
+  /** Due date for the meet-the-owner task, used when this edit takes the slot from empty to a person. */
+  serviceDueDate?: string | null
   /** Included items to take off the project. */
   removeItemIds: string[]
   /** Newly (re)included items with their dates (same shape the initiation wizard sends). */

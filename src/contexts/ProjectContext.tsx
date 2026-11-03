@@ -15,13 +15,14 @@ import {
   syncProjects as apiSyncProjects,
   type Project,
 } from '../lib/projects'
+import { useProfile } from './ProfileContext'
 import { useUnsavedWork } from './UnsavedWorkContext'
 
 const SELECTED_PROJECT_KEY = 'legacy-pm:selectedProjectId'
-// v2: projects gained `initiated`. Bumping the key means a cache written before that
-// field existed is ignored, instead of showing every project as "needs initiating"
+// v2: projects gained `initiated`; v3: `service_id`. Bumping the key means a cache written before a field
+// existed is ignored, instead of showing every project as "needs initiating" / "has no service salesman"
 // for the moment before the first fetch lands.
-const PROJECTS_CACHE_PREFIX = 'legacy-pm:projects:v2:'
+const PROJECTS_CACHE_PREFIX = 'legacy-pm:projects:v3:'
 
 interface PendingSwitch {
   /** The project being switched to, or null to deselect. Wrapped so "null" is
@@ -47,7 +48,22 @@ interface ProjectContextValue {
   refreshProjects: () => Promise<void>
   /** Re-reads the project list from our own database (no Procore call) — e.g. after initiation changes a project. */
   reloadProjects: () => Promise<void>
+  /**
+   * Adds / removes a project. A Service user adding a project that has no service salesman doesn't add it
+   * yet: it becomes `pendingClaim` and the "Meet with the owner/client" modal asks for the optional due date.
+   */
   toggleStar: (project: Project) => Promise<void>
+  /**
+   * Adds a project (never removes it, even if it is already Added) — the Available Projects tab's Add. Same
+   * Service claim flow as toggleStar.
+   */
+  addProject: (project: Project) => Promise<void>
+  /** The project a Service user is about to claim (Add is waiting on the modal), or null. */
+  pendingClaim: Project | null
+  /** The modal's Add Project: adds the project and claims it, with the task's optional due date. */
+  confirmClaim: (dueDate: string | null) => Promise<void>
+  /** The modal's Cancel: aborts the whole Add. */
+  cancelClaim: () => void
   /**
    * Bumps once the server has recorded an Add/remove. Adding a project creates
    * its flow task server-side, so task lists refetch on this (not on the
@@ -111,6 +127,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
   const { hasUnsavedWork } = useUnsavedWork()
+  const { profile } = useProfile()
 
   // Lazily seeded from localStorage so, on a reload, previously-seen cards paint
   // immediately instead of an empty grid while the network round trip is in flight.
@@ -123,6 +140,7 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null)
   const [addedVersion, setAddedVersion] = useState(0)
+  const [pendingClaim, setPendingClaim] = useState<Project | null>(null)
 
   // Keep the cache in sync with whatever's shown, regardless of which code path
   // changed it (initial fetch, Procore sync, star toggle + its revert, ...) —
@@ -224,25 +242,67 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     if (fresh) setProjects(fresh)
   }, [instance, account])
 
-  const toggleStar = useCallback(
-    async (project: Project) => {
+  // The one place an Add / un-Add is recorded. `claimDueDate` is only used when a Service user's Add ends up
+  // claiming the project's service salesman slot (see the pending-claim modal).
+  const applyStar = useCallback(
+    async (project: Project, nextStarred: boolean, claimDueDate: string | null) => {
       if (!account) return
-      const nextStarred = !project.isStarred
+      // A Service user adding a project with no salesman becomes it: show that at once (the project leaves
+      // Available Projects). Un-adding never changes the salesman.
+      const claiming = nextStarred && profile?.title === 'service' && !project.service_id && !!profile.id
       // Optimistic update — revert if the server call fails.
       setProjects((prev) =>
-        prev.map((p) => (p.id === project.id ? { ...p, isStarred: nextStarred } : p)),
+        prev.map((p) =>
+          p.id === project.id
+            ? { ...p, isStarred: nextStarred, service_id: claiming ? (profile?.id ?? null) : p.service_id }
+            : p,
+        ),
       )
-      const ok = await apiSetProjectStarred(instance, account, project.id, nextStarred)
+      const { ok, claimed } = await apiSetProjectStarred(instance, account, project.id, nextStarred, claimDueDate)
       if (!ok) {
         setProjects((prev) =>
-          prev.map((p) => (p.id === project.id ? { ...p, isStarred: !nextStarred } : p)),
+          prev.map((p) =>
+            p.id === project.id ? { ...p, isStarred: !nextStarred, service_id: project.service_id } : p,
+          ),
         )
-      } else {
-        setAddedVersion((v) => v + 1)
+        return
       }
+      setAddedVersion((v) => v + 1)
+      // The server decides who got the slot (someone may have claimed it first): take its answer.
+      if (claiming || claimed) void reloadProjects()
     },
-    [instance, account],
+    [instance, account, profile?.id, profile?.title, reloadProjects],
   )
+
+  const addProject = useCallback(
+    async (project: Project) => {
+      if (profile?.title === 'service' && !project.service_id) {
+        setPendingClaim(project)
+        return
+      }
+      await applyStar(project, true, null)
+    },
+    [profile?.title, applyStar],
+  )
+
+  const toggleStar = useCallback(
+    async (project: Project) => {
+      if (project.isStarred) await applyStar(project, false, null)
+      else await addProject(project)
+    },
+    [applyStar, addProject],
+  )
+
+  const confirmClaim = useCallback(
+    async (dueDate: string | null) => {
+      const project = pendingClaim
+      setPendingClaim(null)
+      if (project) await applyStar(project, true, dueDate)
+    },
+    [pendingClaim, applyStar],
+  )
+
+  const cancelClaim = useCallback(() => setPendingClaim(null), [])
 
   const value = useMemo<ProjectContextValue>(
     () => ({
@@ -258,6 +318,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       refreshProjects,
       reloadProjects,
       toggleStar,
+      addProject,
+      pendingClaim,
+      confirmClaim,
+      cancelClaim,
       addedVersion,
       pendingSwitch,
       confirmPendingSwitch,
@@ -276,6 +340,10 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
       refreshProjects,
       reloadProjects,
       toggleStar,
+      addProject,
+      pendingClaim,
+      confirmClaim,
+      cancelClaim,
       addedVersion,
       pendingSwitch,
       confirmPendingSwitch,

@@ -6,7 +6,7 @@ import type { TaskListRow } from '../lib/taskRows'
 import { TASK_STATUS_LABEL, type Task, type TaskStatus } from '../lib/tasks'
 
 const STATUSES: TaskStatus[] = ['not_started', 'in_progress', 'complete']
-const CATEGORY_LABEL = { setup: 'Setup', recurring: 'Recurring', closeout: 'Closeout', flow: 'FLOW' } as const
+const CATEGORY_LABEL = { setup: 'Setup', recurring: 'Recurring', closeout: 'Closeout', service: 'Service', flow: 'FLOW' } as const
 
 const OPEN_COLUMNS =
   'grid-cols-[7.5rem_minmax(12rem,2.2fr)_minmax(8rem,1.2fr)_minmax(7rem,1fr)_minmax(6rem,0.8fr)_5.5rem_6.5rem_minmax(8rem,1.4fr)_2.75rem]'
@@ -35,6 +35,7 @@ export function TaskTable({
   onOpenFlowTab,
   onSaveNotes,
   onMeetingDate,
+  onOpenProcurementItem,
 }: {
   rows: TaskListRow[]
   mode: 'open' | 'archive'
@@ -61,6 +62,8 @@ export function TaskTable({
    * date input where every other row shows its status control.
    */
   onMeetingDate?: (task: Task, date: string | null) => void
+  /** A task linked to a procurement item shows a chip; clicking it opens that item on the Procurement tab. */
+  onOpenProcurementItem?: (task: Task) => void
 }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   // Groups start collapsed and keep their state across refetches (ids are stable).
@@ -95,11 +98,11 @@ export function TaskTable({
   }
 
   /** The Due cell: red when late (open view only). */
-  function dueCell(due: string | null, tbd = false, time: string | null = null) {
+  function dueCell(due: string | null, tbd = false, time: string | null = null, noDueLabel = false) {
     const late = mode === 'open' && !!due && due < today
     return (
       <div className={late ? 'font-medium text-legacy-red' : 'text-legacy-blue-dark'}>
-        {tbd ? 'TBD' : due ? formatDate(due) : '—'}
+        {tbd ? 'TBD' : due ? formatDate(due) : noDueLabel ? <span className="font-normal text-legacy-blue-light">No due date</span> : '—'}
         {time && !tbd ? (
           <span className="block text-xs font-normal text-legacy-blue-light">{time.slice(0, 5)}</span>
         ) : null}
@@ -110,7 +113,8 @@ export function TaskTable({
   function taskRow(task: Task, indented = false) {
     // Reopening a completed recurring task is refused server-side (its next cycle already exists).
     const statusEditable = !(mode === 'archive' && task.is_recurring)
-    const generated = task.source_category !== null
+    // Checklist tasks are managed by their project; a service task is the one generated task people can edit/delete.
+    const generated = task.source_category !== null && task.source_category !== 'service'
     const assignedBy = task.assigned_by ? person(task.assigned_by) : generated ? 'System' : '—'
 
     return (
@@ -156,6 +160,17 @@ export function TaskTable({
                 {CATEGORY_LABEL[task.source_category]}
               </span>
             )}
+            {task.procurement_item && onOpenProcurementItem && (
+              <button
+                type="button"
+                onClick={() => onOpenProcurementItem(task)}
+                title={`Open in Procurement: ${task.procurement_item.description}`}
+                aria-label={`Open procurement item ${task.procurement_item.description}`}
+                className="ml-2 inline-block max-w-[11rem] truncate rounded-full bg-legacy-blue-light/10 px-2 py-0.5 align-middle text-[11px] font-medium text-legacy-blue-dark hover:bg-legacy-blue-light/20"
+              >
+                {task.procurement_item.description}
+              </button>
+            )}
           </div>
 
           <div className="truncate text-legacy-blue-dark">
@@ -163,7 +178,7 @@ export function TaskTable({
           </div>
           <div className="text-legacy-blue-dark">{task.assignee_ids.map(person).join(', ')}</div>
           <div className="text-legacy-blue-light">{assignedBy}</div>
-          {dueCell(task.due_date, task.is_tbd, task.due_time)}
+          {dueCell(task.due_date, task.is_tbd, task.due_time, task.source_category === 'service')}
           {mode === 'archive' && (
             <div className="text-legacy-blue-dark">
               {task.completed_at ? formatDate(task.completed_at.slice(0, 10)) : '—'}

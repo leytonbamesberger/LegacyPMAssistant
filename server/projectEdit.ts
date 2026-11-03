@@ -16,6 +16,7 @@ import {
   type SetupSelection,
 } from './initiation.js'
 import { selectAll } from './selectAll.js'
+import { changeServiceSalesman, parseServiceDueDate } from './service.js'
 import { insertTasks, isRealDate, meetingDateFields } from './tasks.js'
 import type { CadenceUnit } from '../shared/period.js'
 
@@ -74,6 +75,7 @@ export interface ProjectEditCatalog {
     status: 'active' | 'closing' | 'closed'
     pm_id: string | null
     apm_id: string | null
+    service_id: string | null
   }
   items: EditCatalogItem[]
   /**
@@ -99,7 +101,7 @@ interface ChecklistTaskRow {
 async function loadProject(admin: SupabaseClient, projectId: string) {
   const { data, error } = await admin
     .from('projects')
-    .select('id, initiated, status, pm_id, apm_id')
+    .select('id, initiated, status, pm_id, apm_id, service_id')
     .eq('id', projectId)
     .maybeSingle()
   if (error) throw new Error(error.message)
@@ -297,6 +299,10 @@ export interface EditProjectPayload {
   /** Undefined = leave as is; null = clear. */
   pmId: string | null | undefined
   apmId: string | null | undefined
+  /** The service salesman: undefined = leave as is; null = clear. */
+  serviceId: string | null | undefined
+  /** Due date for the meet-the-owner task, used only when this edit takes the slot from empty to a person. */
+  serviceDueDate: string | null
   /** Included items to take off the project. */
   removeItemIds: string[]
   /** Newly (re)included items with what the wizard would have asked for them. */
@@ -360,7 +366,7 @@ export function parseEditPayload(body: unknown): EditProjectPayload {
   const projectId = asString(raw.projectId)
   if (!projectId) throw new InitiationError('"projectId" (string) is required')
 
-  const person = (key: 'pmId' | 'apmId'): string | null | undefined => {
+  const person = (key: 'pmId' | 'apmId' | 'serviceId'): string | null | undefined => {
     if (!(key in raw)) return undefined
     if (raw[key] !== null && typeof raw[key] !== 'string') throw new InitiationError(`"${key}" must be a string or null`)
     return asString(raw[key])
@@ -383,6 +389,8 @@ export function parseEditPayload(body: unknown): EditProjectPayload {
     projectId,
     pmId: person('pmId'),
     apmId: person('apmId'),
+    serviceId: person('serviceId'),
+    serviceDueDate: parseServiceDueDate(raw.serviceDueDate),
     removeItemIds,
     addSetup,
     addRecurring,
@@ -482,7 +490,9 @@ async function applyDateEdits(
  *    instance and cadence, and moves open closeout tasks (see applyDateEdits).
  *  - added items: any exclusion is lifted and the task(s) are created exactly as initiation does, for
  *    the project's current PM/APM, with the editing user as `assigned_by`.
- * An uninitiated project can only have its PM / APM changed.
+ *  - service salesman: see changeServiceSalesman (empty -> person makes the meet-the-owner task; A -> B moves
+ *    the open one; cleared leaves it).
+ * An uninitiated project can only have its PM / APM (and service salesman) changed.
  */
 export async function editProject(
   admin: SupabaseClient,
@@ -496,6 +506,13 @@ export async function editProject(
     hasDateEdits(payload.dates)
   if (!project.initiated && wantsItems) {
     throw new InitiationError('This project has not been initiated yet — only its PM and APM can be changed')
+  }
+
+  // A Service user edits only the service salesman (PM / APM / tasks / dates are not theirs to change).
+  const { data: actor, error: actorError } = await admin.from('profiles').select('title').eq('id', actingProfileId).maybeSingle()
+  if (actorError) throw new Error(actorError.message)
+  if (actor?.title === 'service' && (payload.pmId !== undefined || payload.apmId !== undefined || wantsItems)) {
+    throw new InitiationError('Service users can only change the service salesman')
   }
 
   // ---- validate (no writes yet) ----
@@ -541,6 +558,14 @@ export async function editProject(
   }
 
   // ---- write ----
+  if (payload.serviceId !== undefined) {
+    await changeServiceSalesman(admin, {
+      projectId,
+      nextId: payload.serviceId,
+      actingProfileId,
+      dueDate: payload.serviceDueDate,
+    })
+  }
   const personFields: { pm_id?: string | null; apm_id?: string | null } = {}
   if (payload.pmId !== undefined) personFields.pm_id = payload.pmId
   if (payload.apmId !== undefined) personFields.apm_id = payload.apmId

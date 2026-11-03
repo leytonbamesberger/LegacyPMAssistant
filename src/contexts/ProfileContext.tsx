@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useMsal } from '@azure/msal-react'
+import type { ProfileTitle } from '../../shared/roles'
 import {
   ensureProfile,
   fetchProfileDirectory,
@@ -20,7 +21,7 @@ interface ProfileContextValue {
   /** Re-runs the initial profile + directory load. */
   reload: () => Promise<void>
   /** Saves the caller's role; false if it couldn't be saved. */
-  setTitle: (title: 'pm' | 'apm') => Promise<boolean>
+  setTitle: (title: ProfileTitle) => Promise<boolean>
   /** display_name for any profile id, falling back to something non-blank. */
   nameFor: (profileId: string | null) => string
 }
@@ -60,7 +61,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   }, [reload])
 
   const setTitle = useCallback(
-    async (title: 'pm' | 'apm') => {
+    async (title: ProfileTitle) => {
       if (!account) return false
       const updated = await updateProfileTitle(instance, account, title)
       if (!updated) return false

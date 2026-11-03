@@ -19,16 +19,21 @@ create table profiles (
   email text not null,
   display_name text,
   created_at timestamptz default now(),
-  -- Self-reported PM/APM role. Not a permission tier; it feeds the Add -> auto-assign
-  -- logic (setProjectStarred in server/projects.ts).
-  title text check (title in ('pm', 'apm')),
+  -- Self-reported role (pm | apm | service; see shared/roles.ts). Not a permission tier; it feeds the Add ->
+  -- auto-assign logic (setProjectStarred in server/projects.ts: PM / APM take their slot, Service claims the
+  -- service salesman) and decides which tabs and tasks the user sees.
+  title text check (title in ('pm', 'apm', 'service')),
   -- No longer used (it belonged to the old user_overview_projects seeding); kept so existing rows and
   -- the live database line up.
   overview_seeded boolean not null default false,
   -- The Overview's "Choose a View" selection (see shared/overviewView.ts): mine = every Added project
   -- (live), pm_ids = every project of these people (follows reassignment), project_ids = individual
   -- picks. The Overview shows the union.
-  overview_view jsonb not null default '{"mine": true, "pm_ids": [], "project_ids": []}'::jsonb
+  overview_view jsonb not null default '{"mine": true, "pm_ids": [], "project_ids": []}'::jsonb,
+  -- The Procurement tab's own "Choose a View" selection (same shape as overview_view, independent of it) and
+  -- the project ids whose groups are collapsed there.
+  procurement_view jsonb not null default '{"mine": true, "pm_ids": [], "project_ids": []}'::jsonb,
+  procurement_collapsed jsonb not null default '[]'::jsonb
 );
 
 -- procore_connections: per-user Procore OAuth tokens, written only by
@@ -61,6 +66,9 @@ create table projects (
   status text not null default 'active' check (status in ('active', 'closing', 'closed')),
   pm_id uuid references profiles(id),
   apm_id uuid references profiles(id),
+  -- The service salesman (at most one per project): set by a Service user's Add (conditional update where
+  -- service_id is null) or by Edit Project; creates the "Meet with owner/client" task (source_category 'service').
+  service_id uuid references profiles(id),
   checklist_enabled boolean not null default true,
   -- Set by the initiation wizard (POST /api/projects { action: 'initiate' }).
   initiated boolean not null default false
@@ -69,6 +77,7 @@ create table projects (
 create index projects_is_active_idx on projects (is_active);
 create index projects_pm_id_idx on projects (pm_id);
 create index projects_apm_id_idx on projects (apm_id);
+create index projects_service_id_idx on projects (service_id);
 
 -- user_starred_projects: a user's "Added" projects (the app's UI says Added; the table keeps
 -- its original name). Adding is also the PM/APM claim gesture — done in application code.
@@ -183,8 +192,9 @@ create index flow_reports_project_id_idx on flow_reports (project_id);
 -- an RLS policy on, it is enforced in server/tasks.ts, not in Postgres.
 --
 -- type is set by the server (person / project / personal), never asked for.
--- source_category is set only on generated tasks — initiation ('setup' | 'recurring') or the Closeout
--- Project wizard ('closeout'); null for manual tasks. Flow reports are NOT tasks: the Tasks page computes one "FLOW Reports (n)" row.
+-- source_category is set only on generated tasks — initiation ('setup' | 'recurring'), the Closeout
+-- Project wizard ('closeout') or a project getting a service salesman ('service'); null for manual tasks.
+-- A Service user (profiles.title = 'service') only ever sees tasks assigned to them that are manual or 'service'. Flow reports are NOT tasks: the Tasks page computes one "FLOW Reports (n)" row.
 -- A task IS the completion record for a checklist item. Completing a recurring task creates a NEW
 -- row for the next cycle (due = old due + cadence). is_tbd + due_date null = "date to be decided".
 -- ---------------------------------------------------------------------------
@@ -203,14 +213,17 @@ create table tasks (
   is_recurring boolean not null default false,
   notes text,
   checklist_item_id uuid references checklist_items(id),
-  source_category text check (source_category in ('setup', 'recurring', 'closeout')),
+  source_category text check (source_category in ('setup', 'recurring', 'closeout', 'service')),
   cadence_value int check (cadence_value > 0),
   cadence_unit text check (cadence_unit in ('day', 'week', 'month')),
   is_tbd boolean not null default false,
   due_time time,
   -- Meeting tasks only (checklist_items.is_meeting): the date the meeting is/was held. Entering one
   -- completes the task and puts it on the calendar; due_date stays the "Setup complete by" date.
-  meeting_date date
+  meeting_date date,
+  -- Set when the task was created from a procurement item (the item is created further down; the
+  -- foreign key is added there). Deleting the item only clears the link.
+  procurement_item_id uuid
 );
 
 create index tasks_assigned_by_idx on tasks (assigned_by);
@@ -225,6 +238,53 @@ create table task_assignees (
 );
 
 create index task_assignees_user_id_idx on task_assignees (user_id);
+
+-- ---------------------------------------------------------------------------
+-- Procurement log: one row per procured item, per project. Est. Delivery (ordered_date + lead time) and
+-- Status (from the dates) are computed in the app, never stored.
+-- ---------------------------------------------------------------------------
+create table procurement_items (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references projects(id) on delete cascade,
+  spec_number text,
+  description text not null,
+  tag text,
+  submitted_date date,
+  approved_date date,
+  ordered_date date,
+  delivered_date date,
+  required_on_site date,
+  lead_time_value integer check (lead_time_value >= 0),
+  lead_time_unit text default 'weeks' check (lead_time_unit in ('days', 'weeks')),
+  vendor text,
+  vendor_rep text,
+  delivery_location text,
+  po_number text,
+  notes text,
+  sort_order integer default 0,
+  created_by uuid references profiles(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index procurement_items_project_id_idx on procurement_items (project_id);
+
+create function procurement_items_touch_updated_at() returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+create trigger procurement_items_touch_updated_at
+  before update on procurement_items
+  for each row execute function procurement_items_touch_updated_at();
+
+alter table tasks
+  add constraint tasks_procurement_item_id_fkey
+  foreign key (procurement_item_id) references procurement_items(id) on delete set null;
+
+create index tasks_procurement_item_id_idx on tasks (procurement_item_id);
 
 -- ---------------------------------------------------------------------------
 -- Submittal checker
@@ -336,6 +396,7 @@ alter table project_checklist_item_exclusions enable row level security;
 alter table flow_reports enable row level security;
 alter table tasks enable row level security;
 alter table task_assignees enable row level security;
+alter table procurement_items enable row level security;
 
 -- NOTE — policies that exist on the LIVE database but are not created here (they came from the
 -- Supabase dashboard, are inert for this app, and their definitions weren't in the column listing):

@@ -1,10 +1,11 @@
 import { ApiResult } from './http.js'
+import { isProfileTitle, type ProfileTitle } from '../shared/roles.js'
 import { getSupabaseAdmin, upsertProfile, verifyMicrosoftToken } from './auth.js'
 
 export interface ProfileDirectoryEntry {
   id: string
   display_name: string | null
-  title: 'pm' | 'apm' | null
+  title: ProfileTitle | null
 }
 
 /**
@@ -40,7 +41,7 @@ export async function handleProfileDirectory(
  * Verify the caller's Microsoft ID token and provision their `profiles` row.
  * All identity comes from the *verified* token — the client sends nothing but
  * the `Authorization: Bearer <idToken>` header, plus an optional JSON body
- * `{ title: 'pm' | 'apm' }` to set/change the caller's own title (self-editable
+ * `{ title: 'pm' | 'apm' | 'service' }` to set/change the caller's own title (self-editable
  * at any time, e.g. from ProfileMenu — not a permission tier, see schema.sql).
  *
  * The write uses the Supabase service-role key, which bypasses RLS. The
@@ -62,8 +63,8 @@ export async function handleProfileRequest(
   if (title === undefined) {
     return { status: 200, json: { profile: result.profile } }
   }
-  if (title !== 'pm' && title !== 'apm') {
-    return { status: 400, json: { error: '"title" must be "pm" or "apm"' } }
+  if (!isProfileTitle(title)) {
+    return { status: 400, json: { error: '"title" must be "pm", "apm" or "service"' } }
   }
 
   const { data, error } = await admin

@@ -19,6 +19,7 @@ import { SearchSelect } from './SearchSelect'
  */
 export function AddTaskModal({
   presetProjectId,
+  presetTitle = '',
   projects,
   directory,
   currentProfileId,
@@ -27,6 +28,8 @@ export function AddTaskModal({
   onSave,
 }: {
   presetProjectId: string | null
+  /** Starting title for a new task (the Procurement tab's "Follow up: …"); ignored when editing. */
+  presetTitle?: string
   projects: Project[]
   directory: ProfileDirectoryEntry[]
   currentProfileId: string | null
@@ -36,7 +39,7 @@ export function AddTaskModal({
   /** Resolves true when saved (the modal closes), false when it failed (the modal stays open). */
   onSave: (fields: NewTaskInput) => Promise<boolean>
 }) {
-  const [title, setTitle] = useState(editing?.title ?? '')
+  const [title, setTitle] = useState(editing?.title ?? presetTitle)
   const [projectId, setProjectId] = useState<string | null>(editing ? editing.project_id : presetProjectId)
   const [notes, setNotes] = useState(editing?.notes ?? '')
   const [assignedTo, setAssignedTo] = useState(editing ? (editing.assignee_ids[0] ?? '') : (currentProfileId ?? ''))

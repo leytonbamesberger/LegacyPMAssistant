@@ -18,6 +18,7 @@ const CATEGORY_OPTIONS: { value: TaskSourceCategory; label: string }[] = [
   { value: 'setup', label: 'Setup' },
   { value: 'recurring', label: 'Recurring' },
   { value: 'closeout', label: 'Closeout' },
+  { value: 'service', label: 'Service' },
   { value: 'flow', label: 'FLOW' },
 ]
 
@@ -28,6 +29,7 @@ export function TaskFilters({
   projects,
   directory,
   showFlow = true,
+  allowedCategories,
 }: {
   filters: TaskFilterState
   onChange: (next: TaskFilterState) => void
@@ -35,6 +37,8 @@ export function TaskFilters({
   directory: ProfileDirectoryEntry[]
   /** The FLOW checkbox belongs on Tasks only: flow reports are never archived. */
   showFlow?: boolean
+  /** Limits the source checkboxes (a Service user only has "Service": setup, recurring, closeout and FLOW tasks never reach them). */
+  allowedCategories?: TaskSourceCategory[]
 }) {
   const projectOptions = useMemo(() => projectSearchOptions(projects), [projects])
 
@@ -87,7 +91,9 @@ export function TaskFilters({
       </div>
       <fieldset className="flex items-center gap-4 pb-1.5">
         <legend className="sr-only">Task type</legend>
-        {CATEGORY_OPTIONS.filter((o) => showFlow || o.value !== 'flow').map(({ value, label }) => (
+        {CATEGORY_OPTIONS.filter(
+          (o) => (showFlow || o.value !== 'flow') && (!allowedCategories || allowedCategories.includes(o.value)),
+        ).map(({ value, label }) => (
           <label key={value} className="flex cursor-pointer items-center gap-1.5 text-sm text-legacy-blue-dark">
             <input
               type="checkbox"

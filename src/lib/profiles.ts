@@ -1,19 +1,20 @@
 import type { AccountInfo, IPublicClientApplication } from '@azure/msal-browser'
 import { apiFetch } from './apiClient'
+import type { ProfileTitle } from '../../shared/roles'
 
 export interface Profile {
   id: string
   azure_oid: string
   email: string
   display_name: string | null
-  title: 'pm' | 'apm' | null
+  title: ProfileTitle | null
   created_at: string
 }
 
 export interface ProfileDirectoryEntry {
   id: string
   display_name: string | null
-  title: 'pm' | 'apm' | null
+  title: ProfileTitle | null
 }
 
 /**
@@ -41,7 +42,7 @@ export async function ensureProfile(
 export async function updateProfileTitle(
   instance: IPublicClientApplication,
   account: AccountInfo,
-  title: 'pm' | 'apm',
+  title: ProfileTitle,
 ): Promise<Profile | null> {
   const body = await apiFetch<{ profile: Profile }>(
     instance,

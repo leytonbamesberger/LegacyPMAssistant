@@ -20,6 +20,7 @@ import {
   type Task,
   type TaskStatus,
 } from '../lib/tasks'
+import { openProcurementItem } from '../lib/procurement'
 import type { Project } from '../lib/projects'
 import { AddTaskModal } from '../components/AddTaskModal'
 import { CloseoutProjectModal } from '../components/CloseoutProjectModal'
@@ -51,7 +52,9 @@ export function TasksPage() {
 
   const addedProjects = useMemo(() => projects.filter((p) => p.isStarred), [projects])
   const addedIdsKey = addedProjects.map((p) => p.id).join(',')
-  const uninitiated = addedProjects.filter((p) => !p.initiated)
+  // Service users never initiate projects (and see no Setup / Recurring / Closeout / FLOW tasks).
+  const isService = profile?.title === 'service'
+  const uninitiated = isService ? [] : addedProjects.filter((p) => !p.initiated)
 
   const [filters, setFilters] = useState<TaskFilterState>(NO_TASK_FILTERS)
   const [tasks, setTasks] = useState<Task[]>(() => initialTasks ?? [])
@@ -165,6 +168,7 @@ export function TasksPage() {
   // flowReports already holds one entry per Added project (a not_started stand-in if none saved),
   // and the flow context patches it the moment a report is saved or submitted, so n stays live.
   const flowInfo = useMemo(() => {
+    if (isService) return null // FLOW is not part of a Service user's Tasks
     if (filters.categories.length > 0 && !filters.categories.includes('flow')) return null
     if (filters.assigneeId !== null && filters.assigneeId !== profile?.id) return null
     const owed = flowReports.filter(
@@ -172,7 +176,7 @@ export function TasksPage() {
     )
     const month = flowReports[0]?.month ?? defaultFlowReportMonth()
     return { count: owed.length, due: lastDayOfMonth(month) }
-  }, [flowReports, filters, profile?.id])
+  }, [flowReports, filters, profile?.id, isService])
 
   // First run: nobody has Added a project and there's nothing to list. (A user with no Added projects
   // who still has tasks, e.g. assigned by a teammate, keeps the normal list.)
@@ -201,6 +205,8 @@ export function TasksPage() {
               project={selectedProject}
               pmName={selectedProject.pm_id ? nameFor(selectedProject.pm_id) : null}
               apmName={selectedProject.apm_id ? nameFor(selectedProject.apm_id) : null}
+              serviceName={selectedProject.service_id ? nameFor(selectedProject.service_id) : null}
+              canCloseout={!isService}
               onEdit={() => setEditingProject(true)}
               onCloseout={() => setClosingProject(true)}
               onClear={() => selectProject(null)}
@@ -253,7 +259,13 @@ export function TasksPage() {
       ) : (
         <>
           <div className="mt-6">
-            <TaskFilters filters={filters} onChange={setFilters} projects={projects} directory={directory} />
+            <TaskFilters
+              filters={filters}
+              onChange={setFilters}
+              projects={projects}
+              directory={directory}
+              allowedCategories={isService ? ['service'] : undefined}
+            />
           </div>
 
           <div className="mt-4">
@@ -293,6 +305,7 @@ export function TasksPage() {
               onOpenFlowTab={() => navigate('/organization/flow')}
               onSaveNotes={handleSaveNotes}
               onMeetingDate={(task, date) => void handleMeetingDate(task, date)}
+              onOpenProcurementItem={(task) => openProcurementItem(navigate, task)}
             />
           </div>
         </>

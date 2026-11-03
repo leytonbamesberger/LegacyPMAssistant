@@ -2,6 +2,7 @@ import { SupabaseClient } from '@supabase/supabase-js'
 import { getValidAccessToken } from './procore.js'
 import { listCompanies, listProjectsForCompany, RawProcoreProject } from './procoreApi.js'
 import { syncGeneratedTaskAssignees } from './generatedTasks.js'
+import { claimServiceSalesman } from './service.js'
 
 export interface ProjectRecord {
   id: string
@@ -17,6 +18,8 @@ export interface ProjectRecord {
   status: 'active' | 'closing' | 'closed'
   pm_id: string | null
   apm_id: string | null
+  /** The project's service salesman (at most one); set by a Service user's Add or by Edit Project. */
+  service_id: string | null
   checklist_enabled: boolean
   /** Set once by the initiation wizard; Setup/Recurring tasks and Overview inclusion require it. */
   initiated: boolean
@@ -106,7 +109,7 @@ export async function syncProjects(
   // every future sync instead of resetting them to their defaults.
   const rows: Omit<
     ProjectRecord,
-    'id' | 'created_at' | 'gc' | 'status' | 'pm_id' | 'apm_id' | 'checklist_enabled' | 'initiated'
+    'id' | 'created_at' | 'gc' | 'status' | 'pm_id' | 'apm_id' | 'service_id' | 'checklist_enabled' | 'initiated'
   >[] = []
   let anyCompanySucceeded = false
 
@@ -185,12 +188,18 @@ export async function getProjectsForProfile(
   }))
 }
 
+/**
+ * Adds / removes a project from the caller's list. Returns whether this Add made the caller the
+ * project's service salesman (only a Service user's Add can, and only when the project had none).
+ */
 export async function setProjectStarred(
   admin: SupabaseClient,
   profileId: string,
   projectId: string,
   starred: boolean,
-): Promise<void> {
+  /** Due date for the meet-the-owner task, if this Add ends up claiming the project. */
+  serviceDueDate: string | null = null,
+): Promise<{ claimed: boolean }> {
   if (starred) {
     const { error } = await admin
       .from('user_starred_projects')
@@ -201,6 +210,7 @@ export async function setProjectStarred(
     if (error) throw new Error(error.message)
 
     await autoAssignOnStar(admin, profileId, projectId)
+    return { claimed: await claimOnStar(admin, profileId, projectId, serviceDueDate) }
   } else {
     const { error } = await admin
       .from('user_starred_projects')
@@ -209,10 +219,30 @@ export async function setProjectStarred(
       .eq('project_id', projectId)
     if (error) throw new Error(error.message)
   }
+  // Removing a project never changes its service salesman or any task.
+  return { claimed: false }
 }
 
 /**
- * Starring is also the PM/APM claim gesture: a `pm` starring a project with no
+ * A Service user's Add is the claim gesture for the service slot: if the project has no salesman they
+ * become it (one conditional update, so two simultaneous Adds can't both win) and the meet-the-owner task
+ * is created. A project that already has one is just added. Never touches pm_id / apm_id / initiated.
+ */
+async function claimOnStar(
+  admin: SupabaseClient,
+  profileId: string,
+  projectId: string,
+  dueDate: string | null,
+): Promise<boolean> {
+  const { data: profile, error } = await admin.from('profiles').select('title').eq('id', profileId).single()
+  if (error) throw new Error(error.message)
+  if (profile?.title !== 'service') return false
+  return claimServiceSalesman(admin, { projectId, salesmanId: profileId, actingProfileId: profileId, dueDate })
+}
+
+/**
+ * Starring is also the PM/APM claim gesture (Service users are ignored here — they claim the service slot
+ * instead, see claimOnStar, and never count toward PM/APM): a `pm` starring a project with no
  * `pm_id` (or an `apm` starring one with no `apm_id`) claims that slot. A PM
  * starring an already-pm_id'd project just stars it — no reassignment. Both
  * fields stay reassignable afterward via `updateProject`, regardless of title.

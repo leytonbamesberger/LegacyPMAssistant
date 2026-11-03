@@ -2,13 +2,16 @@ import type { Project } from '../lib/projects'
 
 /**
  * The selected project's bubble in the Tasks page's pinned area (same shape and position as the
- * Initiate Project bubbles): name, PM, APM, and Edit / Closeout Project. An uninitiated project only
- * offers Edit (PM and APM) — the Initiate Project bubble covers the rest, so Closeout is hidden.
+ * Initiate Project bubbles): name, PM, APM, Service Salesman, and Edit / Closeout Project. An uninitiated
+ * project only offers Edit (PM and APM) — the Initiate Project bubble covers the rest, so Closeout is hidden,
+ * and a Service user never gets Closeout.
  */
 export function ProjectBubble({
   project,
   pmName,
   apmName,
+  serviceName,
+  canCloseout = true,
   onEdit,
   onCloseout,
   onClear,
@@ -16,6 +19,9 @@ export function ProjectBubble({
   project: Project
   pmName: string | null
   apmName: string | null
+  serviceName: string | null
+  /** False for a Service user: no Closeout Project button. */
+  canCloseout?: boolean
   onEdit: () => void
   onCloseout: () => void
   onClear: () => void
@@ -38,14 +44,15 @@ export function ProjectBubble({
           )}
         </div>
         <div className="text-xs text-legacy-blue-light">
-          PM: {pmName ?? 'Unassigned'} · APM: {apmName ?? 'Unassigned'}
+          PM: {pmName ?? 'Unassigned'} · APM: {apmName ?? 'Unassigned'} · Service Salesman:{' '}
+          {serviceName ?? 'Unassigned'}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <button type="button" onClick={onEdit} className={button}>
           Edit
         </button>
-        {project.initiated && (
+        {project.initiated && canCloseout && (
           <button type="button" onClick={onCloseout} className={button}>
             Closeout Project
           </button>

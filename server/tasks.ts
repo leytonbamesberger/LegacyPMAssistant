@@ -4,10 +4,11 @@ import { selectAll } from './selectAll.js'
 
 export type TaskStatus = 'not_started' | 'in_progress' | 'complete'
 /**
- * 'setup' | 'recurring' come from initiation; 'closeout' from the Closeout Project wizard. 'flow' is
+ * 'setup' | 'recurring' come from initiation; 'closeout' from the Closeout Project wizard; 'service' is the
+ * "Meet with owner/client" task made when a project gets a service salesman. 'flow' is
  * kept only so the list filter still accepts it; flow reports are no longer task rows.
  */
-export type TaskSourceCategory = 'setup' | 'recurring' | 'closeout' | 'flow'
+export type TaskSourceCategory = 'setup' | 'recurring' | 'closeout' | 'service' | 'flow'
 
 export interface TaskRecord {
   id: string
@@ -39,6 +40,13 @@ export interface TaskRecord {
    * withMeetingFlags — the Tasks page keeps meetings out of the Setup bundle.
    */
   is_meeting: boolean
+  /** The procurement item this task follows up on (tasks.procurement_item_id); null for everything else. */
+  procurement_item_id: string | null
+  /**
+   * That item's description and project, for the chip on Tasks / Archive rows. Set on listings by
+   * withProcurementItems; null when the task has no item.
+   */
+  procurement_item: { description: string; project_id: string } | null
   assignee_ids: string[]
 }
 
@@ -62,6 +70,7 @@ export interface InsertTaskInput {
   checklistItemId?: string | null
   sourceCategory?: TaskSourceCategory | null
   meetingDate?: string | null
+  procurementItemId?: string | null
 }
 
 /** A business-rule rejection (not a server fault) — routes map this to a 4xx. */
@@ -77,11 +86,18 @@ export class TaskRuleError extends Error {
 const TASK_SELECT = '*, task_assignees(user_id)'
 const ID_CHUNK = 100
 
-type TaskRow = Omit<TaskRecord, 'assignee_ids' | 'is_meeting'> & { task_assignees: { user_id: string }[] }
+type TaskRow = Omit<TaskRecord, 'assignee_ids' | 'is_meeting' | 'procurement_item'> & {
+  task_assignees: { user_id: string }[]
+}
 
 function toRecord(row: TaskRow): TaskRecord {
   const { task_assignees, ...rest } = row
-  return { ...rest, is_meeting: false, assignee_ids: (task_assignees ?? []).map((a) => a.user_id) }
+  return {
+    ...rest,
+    is_meeting: false,
+    procurement_item: null,
+    assignee_ids: (task_assignees ?? []).map((a) => a.user_id),
+  }
 }
 
 /** Marks tasks generated from a meeting checklist item. One small query (the flag is set on a handful of catalog rows). */
@@ -91,6 +107,37 @@ export async function withMeetingFlags(admin: SupabaseClient, tasks: TaskRecord[
   if (error) throw new Error(error.message)
   const meetingIds = new Set((data ?? []).map((r) => r.id as string))
   return tasks.map((t) => ({ ...t, is_meeting: !!t.checklist_item_id && meetingIds.has(t.checklist_item_id) }))
+}
+
+/** Fills in `procurement_item` (description + project) for tasks linked to a procurement item. */
+export async function withProcurementItems(admin: SupabaseClient, tasks: TaskRecord[]): Promise<TaskRecord[]> {
+  const ids = [...new Set(tasks.map((t) => t.procurement_item_id).filter((id): id is string => !!id))]
+  if (ids.length === 0) return tasks
+  const rows = await inChunks(ids, async (chunk) => {
+    const { data, error } = await admin.from('procurement_items').select('id, description, project_id').in('id', chunk)
+    if (error) throw new Error(error.message)
+    return (data ?? []) as { id: string; description: string; project_id: string }[]
+  })
+  const byId = new Map(rows.map((r) => [r.id, { description: r.description, project_id: r.project_id }]))
+  return tasks.map((t) => ({ ...t, procurement_item: (t.procurement_item_id && byId.get(t.procurement_item_id)) || null }))
+}
+
+/** Everything a task listing adds on top of the raw rows. */
+async function decorate(admin: SupabaseClient, tasks: TaskRecord[]): Promise<TaskRecord[]> {
+  return withProcurementItems(admin, await withMeetingFlags(admin, tasks))
+}
+
+/**
+ * Service users (profiles.title = 'service') see only tasks assigned TO them that are manual or
+ * 'service' — never setup / recurring / closeout / flow, even if assigned. Enforced in the queries below,
+ * not just the UI.
+ */
+const SERVICE_VISIBLE_CATEGORIES = 'source_category.is.null,source_category.eq.service'
+
+async function isServiceUser(admin: SupabaseClient, profileId: string): Promise<boolean> {
+  const { data, error } = await admin.from('profiles').select('title').eq('id', profileId).maybeSingle()
+  if (error) throw new Error(error.message)
+  return data?.title === 'service'
 }
 
 function compareByDueDate(a: TaskRecord, b: TaskRecord): number {
@@ -158,8 +205,10 @@ async function listOpenTasks(
   profileId: string,
   { projectId, assigneeId, categories }: TaskListOptions,
 ): Promise<{ tasks: TaskRecord[]; total: number }> {
+  const serviceOnly = await isServiceUser(admin, profileId)
   const rows = await selectAll<TaskRow>(() => {
     let query = admin.from('tasks').select(TASK_SELECT).neq('status', 'complete')
+    if (serviceOnly) query = query.or(SERVICE_VISIBLE_CATEGORIES)
     if (projectId) query = query.eq('project_id', projectId)
     if (categories?.length) query = query.in('source_category', categories)
     return query.order('id') as never
@@ -167,10 +216,10 @@ async function listOpenTasks(
 
   const tasks = rows
     .map(toRecord)
-    .filter((t) => t.assigned_by === profileId || t.assignee_ids.includes(profileId))
+    .filter((t) => (serviceOnly ? t.assignee_ids.includes(profileId) : t.assigned_by === profileId || t.assignee_ids.includes(profileId)))
     .filter((t) => !assigneeId || t.assignee_ids.includes(assigneeId))
     .sort(sortOpen)
-  return { tasks: await withMeetingFlags(admin, tasks), total: tasks.length }
+  return { tasks: await decorate(admin, tasks), total: tasks.length }
 }
 
 async function listCompletedTasks(
@@ -180,6 +229,7 @@ async function listCompletedTasks(
 ): Promise<{ tasks: TaskRecord[]; total: number }> {
   type Light = { id: string; completed_at: string | null }
   const cats = categories?.length ? categories : null
+  const serviceOnly = await isServiceUser(admin, profileId)
 
   const mine = await selectAll<{ task_id: string }>(
     () => admin.from('task_assignees').select('task_id').eq('user_id', profileId).order('task_id') as never,
@@ -189,6 +239,7 @@ async function listCompletedTasks(
       mine.map((r) => r.task_id),
       async (chunk) => {
         let query = admin.from('tasks').select('id, completed_at').eq('status', 'complete').in('id', chunk)
+        if (serviceOnly) query = query.or(SERVICE_VISIBLE_CATEGORIES)
         if (projectId) query = query.eq('project_id', projectId)
         if (cats) query = query.in('source_category', cats)
         const { data, error } = await query
@@ -196,7 +247,8 @@ async function listCompletedTasks(
         return (data ?? []) as Light[]
       },
     ),
-    selectAll<Light>(() => {
+    // A Service user only ever sees what is assigned to them, never what they assigned to others.
+    serviceOnly ? Promise.resolve<Light[]>([]) : selectAll<Light>(() => {
       let query = admin
         .from('tasks')
         .select('id, completed_at')
@@ -246,7 +298,7 @@ async function listCompletedTasks(
   })
   const order = new Map(pageIds.map((id, i) => [id, i]))
   full.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
-  return { tasks: await withMeetingFlags(admin, full), total: candidates.length }
+  return { tasks: await decorate(admin, full), total: candidates.length }
 }
 
 /**
@@ -254,6 +306,7 @@ async function listCompletedTasks(
  * shows for meetings. Small (a handful per project), so not paginated.
  */
 export async function getMeetingDatedTasks(admin: SupabaseClient, profileId: string): Promise<TaskRecord[]> {
+  if (await isServiceUser(admin, profileId)) return [] // meetings are Setup tasks, which a Service user never sees
   const mine = await selectAll<{ task_id: string }>(
     () => admin.from('task_assignees').select('task_id').eq('user_id', profileId).order('task_id') as never,
   )
@@ -286,7 +339,7 @@ export async function getMeetingDatedTasks(admin: SupabaseClient, profileId: str
     if (error) throw new Error(error.message)
     return ((data ?? []) as unknown as TaskRow[]).map(toRecord)
   })
-  return withMeetingFlags(admin, rows)
+  return decorate(admin, rows)
 }
 
 function toInsertRow(input: InsertTaskInput) {
@@ -309,6 +362,7 @@ function toInsertRow(input: InsertTaskInput) {
     checklist_item_id: input.checklistItemId ?? null,
     source_category: input.sourceCategory ?? null,
     meeting_date: input.meetingDate ?? null,
+    procurement_item_id: input.procurementItemId ?? null,
   }
 }
 
@@ -322,7 +376,7 @@ export async function insertTasks(admin: SupabaseClient, inputs: InsertTaskInput
 
   const { data, error } = await admin.from('tasks').insert(inputs.map(toInsertRow)).select()
   if (error) throw new Error(error.message)
-  const rows = (data ?? []) as Omit<TaskRecord, 'assignee_ids' | 'is_meeting'>[]
+  const rows = (data ?? []) as Omit<TaskRecord, 'assignee_ids' | 'is_meeting' | 'procurement_item'>[]
 
   const assigneeRows = rows.flatMap((row, i) =>
     [...new Set(inputs[i].assigneeIds)].map((user_id) => ({ task_id: row.id, user_id })),
@@ -335,7 +389,12 @@ export async function insertTasks(admin: SupabaseClient, inputs: InsertTaskInput
       throw new Error(assigneeError.message)
     }
   }
-  return rows.map((row, i) => ({ ...row, is_meeting: false, assignee_ids: [...new Set(inputs[i].assigneeIds)] }))
+  return rows.map((row, i) => ({
+    ...row,
+    is_meeting: false,
+    procurement_item: null,
+    assignee_ids: [...new Set(inputs[i].assigneeIds)],
+  }))
 }
 
 export async function insertTask(admin: SupabaseClient, input: InsertTaskInput): Promise<TaskRecord> {
@@ -354,6 +413,8 @@ export interface NewTaskFields {
   isRecurring: boolean
   cadenceValue: number | null
   cadenceUnit: CadenceUnit | null
+  /** Set when the task is created from a procurement item ("Add task" on the Procurement tab); never changed by an edit. */
+  procurementItemId?: string | null
 }
 
 /**
@@ -370,11 +431,20 @@ export function inferTaskType(
   return projectId ? 'project' : 'personal'
 }
 
-export function createTask(
+export async function createTask(
   admin: SupabaseClient,
   creatorProfileId: string,
   fields: NewTaskFields,
 ): Promise<TaskRecord> {
+  if (fields.procurementItemId) {
+    const { data, error } = await admin
+      .from('procurement_items')
+      .select('id')
+      .eq('id', fields.procurementItemId)
+      .maybeSingle()
+    if (error) throw new Error(error.message)
+    if (!data) throw new TaskRuleError('Procurement item not found', 404)
+  }
   return insertTask(admin, {
     ...fields,
     type: inferTaskType(creatorProfileId, fields.assigneeIds, fields.projectId),
@@ -398,7 +468,7 @@ export async function updateTask(
   fields: NewTaskFields,
 ): Promise<TaskRecord> {
   const task = await getTaskIfAccessible(admin, taskId, callerProfileId)
-  if (task.source_category) {
+  if (task.source_category && task.source_category !== 'service') {
     throw new TaskRuleError('Checklist tasks are managed by the project and can’t be edited')
   }
 
@@ -593,7 +663,7 @@ export async function deleteTask(
   callerProfileId: string,
 ): Promise<void> {
   const task = await getTaskIfAccessible(admin, taskId, callerProfileId)
-  if (task.source_category) {
+  if (task.source_category && task.source_category !== 'service') {
     throw new TaskRuleError('Checklist tasks are managed by the project and can’t be deleted')
   }
   const { error } = await admin.from('tasks').delete().eq('id', taskId)

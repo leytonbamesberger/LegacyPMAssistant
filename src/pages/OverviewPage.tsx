@@ -38,7 +38,8 @@ export function OverviewPage() {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
   const { projects, reloadProjects, addedVersion } = useProject()
-  const { directory, nameFor } = useProfile()
+  const { profile, directory, nameFor } = useProfile()
+  const isService = profile?.title === 'service'
   const { reportVersion } = useFlowReport()
 
   const [data, setData] = useState<OverviewData | null>(null)
@@ -238,6 +239,11 @@ export function OverviewPage() {
                               )}
                               {label(row.project_id)}
                             </span>
+                            {project?.service_id && (
+                              <span className="block truncate text-[10px] font-normal text-legacy-blue-light">
+                                Service: {nameFor(project.service_id)}
+                              </span>
+                            )}
                           </th>
                           {row.initiated ? (
                             columns.length === 0 ? (
@@ -270,13 +276,16 @@ export function OverviewPage() {
                               {/* Pinned just right of the sticky project column so it stays readable while the grid scrolls. */}
                               <div className="sticky left-56 flex w-max items-center gap-3 px-3 text-legacy-blue-light">
                                 <span>Initiate this project to see its checklist</span>
-                                <button
-                                  type="button"
-                                  onClick={() => project && setInitiating(project)}
-                                  className="rounded-full bg-legacy-red px-2.5 py-0.5 text-[11px] font-semibold text-white hover:opacity-90"
-                                >
-                                  Initiate Project
-                                </button>
+                                {/* Initiating a project is a PM / APM job: Service users just see the muted text. */}
+                                {!isService && (
+                                  <button
+                                    type="button"
+                                    onClick={() => project && setInitiating(project)}
+                                    className="rounded-full bg-legacy-red px-2.5 py-0.5 text-[11px] font-semibold text-white hover:opacity-90"
+                                  >
+                                    Initiate Project
+                                  </button>
+                                )}
                               </div>
                             </td>
                           )}

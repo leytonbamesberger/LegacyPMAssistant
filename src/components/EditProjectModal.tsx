@@ -52,6 +52,10 @@ const TABS: { id: Tab; label: string }[] = [
  *    (Setup: a due date, plus a date / TBD / Done for a meeting; Recurring: start date and cadence).
  *  - Dates tab: open items are editable, completed ones read-only (meetings excepted — see EditProjectDates).
  *  - An uninitiated project can only have its PM and APM changed (no tabs, no Dates).
+ *  - Service Salesman: PM / APM users get the field on the People tab (searchable over people with the Service
+ *    role, clearable); a Service user sees only that field, with a "Me" shortcut — no PM / APM, Tasks or Dates.
+ *    Taking the slot from empty to a person creates the "Meet with owner/client" task, so the optional due date
+ *    for it is asked right under the field.
  */
 export function EditProjectModal({
   project,
@@ -65,7 +69,8 @@ export function EditProjectModal({
 }) {
   const { instance, accounts } = useMsal()
   const account = accounts[0]
-  const { directory } = useProfile()
+  const { directory, profile } = useProfile()
+  const isService = profile?.title === 'service'
 
   const [catalog, setCatalog] = useState<ProjectEditCatalog | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -75,6 +80,9 @@ export function EditProjectModal({
 
   const [pmId, setPmId] = useState<string | null>(project.pm_id)
   const [apmId, setApmId] = useState<string | null>(project.apm_id)
+  const [serviceId, setServiceId] = useState<string | null>(project.service_id)
+  /** Due date (YYYY-MM-DD, '' = none) of the meet-the-owner task a new salesman gets. */
+  const [serviceDueDate, setServiceDueDate] = useState('')
   /** Checked state per catalog item id (initialised from what the project has now). */
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [setupConfig, setSetupConfig] = useState<Record<string, SetupConfig>>({})
@@ -97,6 +105,7 @@ export function EditProjectModal({
       setCatalog(result)
       setPmId(result.project.pm_id)
       setApmId(result.project.apm_id)
+      setServiceId(result.project.service_id)
       setChecked(Object.fromEntries(result.items.map((i) => [i.id, i.state === 'included'])))
       // Added Setup items default to the project's existing open setup due date, else today.
       setSetupCompleteBy(result.setupDueDate ?? localToday())
@@ -140,12 +149,22 @@ export function EditProjectModal({
   const canAdvance = step === 'setup' ? setupValid : step === 'recurring' ? recurringValid : true
 
   const removedIds = new Set(removed.map((i) => i.id))
-  const dateEdits = catalog && datesState && initiated ? datesPayload(catalog, datesState, removedIds) : null
-  const datesOk = !catalog || !datesState || !initiated || datesValid(catalog, datesState, removedIds)
+  // A Service user has no Dates tab, so a blank date there must never block their save.
+  const dateEdits = catalog && datesState && initiated && !isService ? datesPayload(catalog, datesState, removedIds) : null
+  const datesOk = !catalog || !datesState || !initiated || isService || datesValid(catalog, datesState, removedIds)
 
   const personChanged = !!catalog && (pmId !== catalog.project.pm_id || apmId !== catalog.project.apm_id)
+  const serviceChanged = !!catalog && serviceId !== catalog.project.service_id
+  // Empty -> a person makes the meet-the-owner task, which is what the due date is for.
+  const claimingService = serviceChanged && !!serviceId && catalog?.project.service_id === null
+  // People with the Service role, plus the current salesman even if they have since switched roles.
+  const serviceChoices = useMemo(
+    () => directory.filter((p) => p.title === 'service' || p.id === catalog?.project.service_id),
+    [directory, catalog?.project.service_id],
+  )
   const dirty =
     personChanged ||
+    serviceChanged ||
     removed.length > 0 ||
     addedSetup.length + addedRecurring.length > 0 ||
     (!!dateEdits && hasDateChanges(dateEdits))
@@ -159,6 +178,8 @@ export function EditProjectModal({
       projectId: project.id,
       pmId: pmId !== catalog.project.pm_id ? pmId : undefined,
       apmId: apmId !== catalog.project.apm_id ? apmId : undefined,
+      serviceId: serviceChanged ? serviceId : undefined,
+      serviceDueDate: claimingService && serviceDueDate ? serviceDueDate : undefined,
       removeItemIds: removed.map((i) => i.id),
       addSetup: addedSetup.map((item) => {
         const cfg = getSetup(item.key)
@@ -225,7 +246,7 @@ export function EditProjectModal({
       ) : (
         <>
           <div className="mt-4">
-            {step === 'main' && initiated && (
+            {step === 'main' && initiated && !isService && (
               <div role="tablist" aria-label="Edit project" className="mb-4 flex gap-1 border-b border-legacy-blue-light/20">
                 {TABS.map((t) => (
                   <button
@@ -252,24 +273,65 @@ export function EditProjectModal({
               <div className="space-y-5">
                 {(!initiated || tab === 'people') && (
                   <div role="tabpanel" id="edit-panel-people" aria-labelledby="edit-tab-people">
-                    <p className="text-sm text-legacy-blue-light">
-                      Changing the PM or APM moves this project's open Setup, Recurring and Closeout tasks to
-                      the new person. Completed tasks stay as they are.
-                    </p>
-                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <ProfileSearchSelect label="PM" value={pmId} directory={directory} onChange={setPmId} />
-                      <ProfileSearchSelect label="APM" value={apmId} directory={directory} onChange={setApmId} />
+                    {!isService && (
+                      <>
+                        <p className="text-sm text-legacy-blue-light">
+                          Changing the PM or APM moves this project's open Setup, Recurring and Closeout tasks to
+                          the new person. Completed tasks stay as they are.
+                        </p>
+                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <ProfileSearchSelect label="PM" value={pmId} directory={directory} onChange={setPmId} />
+                          <ProfileSearchSelect label="APM" value={apmId} directory={directory} onChange={setApmId} />
+                        </div>
+                      </>
+                    )}
+                    <div className={isService ? '' : 'mt-4'}>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <ProfileSearchSelect
+                            label="Service Salesman"
+                            value={serviceId}
+                            directory={serviceChoices}
+                            onChange={setServiceId}
+                          />
+                          {isService && profile && serviceId !== profile.id && (
+                            <button
+                              type="button"
+                              onClick={() => setServiceId(profile.id)}
+                              className="mt-1.5 text-xs font-medium text-legacy-blue-dark underline underline-offset-2 hover:no-underline"
+                            >
+                              Me
+                            </button>
+                          )}
+                        </div>
+                        {claimingService && (
+                          <label className="block text-xs font-medium text-legacy-blue-light">
+                            Meet with owner/client — due date (optional)
+                            <input
+                              type="date"
+                              value={serviceDueDate}
+                              min="1900-01-01"
+                              onChange={(e) => setServiceDueDate(e.target.value)}
+                              className="mt-1 block w-full rounded-md border border-legacy-blue-light/30 px-2 py-1.5 text-sm text-legacy-blue-dark focus:border-legacy-blue-dark focus:outline-none"
+                            />
+                          </label>
+                        )}
+                      </div>
+                      <p className="mt-2 text-xs text-legacy-blue-light">
+                        Choosing a salesman for a project that has none creates their "Meet with owner/client" task. Changing
+                        it moves the open task to the new person; clearing it leaves the open task where it is.
+                      </p>
                     </div>
                   </div>
                 )}
 
-                {initiated && tab === 'dates' && datesState && (
+                {initiated && !isService && tab === 'dates' && datesState && (
                   <div role="tabpanel" id="edit-panel-dates" aria-labelledby="edit-tab-dates">
                     <EditDatesTab catalog={catalog} state={datesState} onChange={setDatesState} removed={removedIds} />
                   </div>
                 )}
 
-                {initiated ? (
+                {isService ? null : initiated ? (
                   tab === 'tasks' && (
                     <div className="space-y-5" role="tabpanel" id="edit-panel-tasks" aria-labelledby="edit-tab-tasks">
                       <Checklist

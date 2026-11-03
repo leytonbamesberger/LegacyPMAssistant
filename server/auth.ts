@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify, JWTPayload } from 'jose'
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
+import type { ProfileTitle } from '../shared/roles.js'
 import { getServerConfig } from './config.js'
 import { ApiResult, bearerToken } from './http.js'
 
@@ -16,7 +17,7 @@ export interface ProfileRecord {
   azure_oid: string
   email: string
   display_name: string | null
-  title: 'pm' | 'apm' | null
+  title: ProfileTitle | null
   created_at: string
 }
 

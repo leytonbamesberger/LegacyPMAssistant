@@ -5,6 +5,7 @@ import { CalendarPanel } from './CalendarPanel'
 import { HeaderNav } from './HeaderNav'
 import { OrganizationTabs } from './OrganizationTabs'
 import { ProfileMenu } from './ProfileMenu'
+import { ServiceClaimModal } from './ServiceClaimModal'
 import { Sidebar } from './Sidebar'
 import { UnsavedWorkGuardModal } from './UnsavedWorkGuardModal'
 
@@ -51,6 +52,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
 
       <UnsavedWorkGuardModal />
+      <ServiceClaimModal />
       <CalendarPanel open={calendarOpen} onClose={() => setCalendarOpen(false)} />
     </div>
   )

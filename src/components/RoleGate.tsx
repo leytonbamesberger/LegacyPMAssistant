@@ -1,12 +1,8 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { useProfile } from '../contexts/ProfileContext'
+import { PROFILE_TITLE_LABEL, PROFILE_TITLES, type ProfileTitle } from '../../shared/roles'
 import { Modal } from './Modal'
-
-const ROLES = [
-  { value: 'pm', label: 'Project Manager' },
-  { value: 'apm', label: 'Assistant Project Manager' },
-] as const
 
 /**
  * Nobody gets into the app without a role. While the signed-in user's `profiles.title` is null this
@@ -24,7 +20,7 @@ export function RoleGate({ children }: { children: ReactNode }) {
 
 function ChooseRole() {
   const { setTitle } = useProfile()
-  const [choice, setChoice] = useState<'pm' | 'apm' | null>(null)
+  const [choice, setChoice] = useState<ProfileTitle | null>(null)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
 
@@ -48,16 +44,15 @@ function ChooseRole() {
             Choose your role
           </h2>
           <p className="mt-1 text-sm text-legacy-blue-light">
-            Your role decides whether you are assigned as PM or APM when you are the first to add a
-            project.
+            Your role decides how you are assigned when you are the first to add a project.
           </p>
 
           <div role="radiogroup" aria-label="Role" className="mt-4 space-y-2">
-            {ROLES.map((role) => (
+            {PROFILE_TITLES.map((role) => (
               <label
-                key={role.value}
+                key={role}
                 className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm text-legacy-blue-dark transition ${
-                  choice === role.value
+                  choice === role
                     ? 'border-legacy-blue-dark bg-legacy-blue-light/10'
                     : 'border-legacy-blue-light/30 hover:border-legacy-blue-dark'
                 }`}
@@ -65,12 +60,12 @@ function ChooseRole() {
                 <input
                   type="radio"
                   name="role"
-                  value={role.value}
-                  checked={choice === role.value}
-                  onChange={() => setChoice(role.value)}
+                  value={role}
+                  checked={choice === role}
+                  onChange={() => setChoice(role)}
                   className="h-4 w-4 accent-legacy-blue-dark"
                 />
-                {role.label}
+                {PROFILE_TITLE_LABEL[role]}
               </label>
             ))}
           </div>

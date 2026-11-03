@@ -12,6 +12,7 @@ export default vercelRouteMulti({
       initiationCatalogFor: queryParam(req, 'initiationCatalogFor'),
       overview: queryParam(req, 'overview'),
       editCatalogFor: queryParam(req, 'editCatalogFor'),
+      procurement: queryParam(req, 'procurement'),
     }),
   POST: (req) => handleProjectsPost(authHeader(req), req.body),
 })

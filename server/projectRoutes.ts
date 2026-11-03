@@ -16,7 +16,16 @@ import {
   parseCloseoutPayload,
   parseEditPayload,
 } from './projectEdit.js'
+import {
+  createProcurementItem,
+  deleteProcurementItem,
+  getProcurement,
+  saveProcurementCollapsed,
+  saveProcurementView,
+  updateProcurementItem,
+} from './procurement.js'
 import { initiateProject, parseInitiationPayload } from './initiation.js'
+import { parseServiceDueDate } from './service.js'
 import { TaskRuleError } from './tasks.js'
 
 async function loadProjectsResult(
@@ -51,13 +60,30 @@ async function loadProjectsResult(
  *
  * GET /api/projects?editCatalogFor=<projectId> instead returns what the Edit Project and Closeout
  * Project modals need (see server/projectEdit.ts).
+ *
+ * GET /api/projects?procurement=1 instead returns the Procurement log for the caller's view (see
+ * server/procurement.ts).
  */
 export async function handleProjectsList(
   authorizationHeader: string | undefined,
-  query: { initiationCatalogFor?: string; overview?: string; editCatalogFor?: string } = {},
+  query: { initiationCatalogFor?: string; overview?: string; editCatalogFor?: string; procurement?: string } = {},
 ): Promise<ApiResult> {
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
+
+  if (query.procurement) {
+    try {
+      return { status: 200, json: await getProcurement(resolved.admin, resolved.profileId) }
+    } catch (err) {
+      return {
+        status: 500,
+        json: {
+          error: 'Could not load the procurement log',
+          detail: err instanceof Error ? err.message : String(err),
+        },
+      }
+    }
+  }
 
   if (query.overview) {
     try {
@@ -213,7 +239,8 @@ export async function handleProjectsSync(
 
 /**
  * The 'star' action of POST /api/projects (MSAL-authenticated).
- * Body: { action: 'star', projectId: string, starred: boolean }
+ * Body: { action: 'star', projectId: string, starred: boolean, serviceDueDate?: string | null }
+ * Responds { starred, claimed }: claimed = a Service user's Add made them the project's service salesman.
  */
 export async function handleProjectsStar(
   authorizationHeader: string | undefined,
@@ -222,9 +249,10 @@ export async function handleProjectsStar(
   const resolved = await resolveProfile(authorizationHeader)
   if ('error' in resolved) return resolved.error
 
-  const { projectId, starred } = (body ?? {}) as {
+  const { projectId, starred, serviceDueDate } = (body ?? {}) as {
     projectId?: unknown
     starred?: unknown
+    serviceDueDate?: unknown
   }
   if (typeof projectId !== 'string' || typeof starred !== 'boolean') {
     return {
@@ -234,9 +262,11 @@ export async function handleProjectsStar(
   }
 
   try {
-    await setProjectStarred(resolved.admin, resolved.profileId, projectId, starred)
-    return { status: 200, json: { starred } }
+    const dueDate = parseServiceDueDate(serviceDueDate)
+    const { claimed } = await setProjectStarred(resolved.admin, resolved.profileId, projectId, starred, dueDate)
+    return { status: 200, json: { starred, claimed } }
   } catch (err) {
+    if (err instanceof TaskRuleError) return { status: err.status, json: { error: err.message } }
     return {
       status: 500,
       json: {
@@ -330,7 +360,8 @@ export async function handleProjectsUpdate(
 }
 
 /**
- * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update' | 'initiate' | 'edit-project' | 'closeout' | 'overview-view', ... }.
+ * POST /api/projects — action dispatch: { action: 'sync' | 'star' | 'update' | 'initiate' | 'edit-project' | 'closeout' | 'overview-view'
+ * | 'procurement-view' | 'procurement-collapsed' | 'procurement-create' | 'procurement-update' | 'procurement-delete', ... }.
  * One file/handler per verb regardless of action count, to stay well under
  * Vercel's Hobby-plan 12-Serverless-Function cap (see vercelAdapter.ts).
  */
@@ -350,6 +381,29 @@ export async function handleProjectsPost(
       return handleProjectsInitiate(authorizationHeader, body)
     case 'overview-view':
       return handleProjectsOverviewView(authorizationHeader, body)
+    case 'procurement-view':
+      return runProjectChange(authorizationHeader, 'save the procurement view', async (admin, profileId) => ({
+        view: await saveProcurementView(admin, profileId, (body as { view?: unknown }).view),
+      }))
+    case 'procurement-collapsed':
+      return runProjectChange(authorizationHeader, 'save the collapsed projects', async (admin, profileId) => ({
+        collapsed: await saveProcurementCollapsed(admin, profileId, (body as { projectIds?: unknown }).projectIds),
+      }))
+    case 'procurement-create':
+      return runProjectChange(authorizationHeader, 'add the item', async (admin, profileId) => {
+        const { projectId, description } = body as { projectId?: unknown; description?: unknown }
+        return { item: await createProcurementItem(admin, profileId, projectId, description) }
+      })
+    case 'procurement-update':
+      return runProjectChange(authorizationHeader, 'save the item', async (admin) => {
+        const { itemId, fields } = body as { itemId?: unknown; fields?: unknown }
+        return { item: await updateProcurementItem(admin, itemId, fields) }
+      })
+    case 'procurement-delete':
+      return runProjectChange(authorizationHeader, 'delete the item', async (admin) => {
+        await deleteProcurementItem(admin, (body as { itemId?: unknown }).itemId)
+        return {}
+      })
     case 'edit-project':
       return runProjectChange(authorizationHeader, 'save the project', (admin, profileId) =>
         editProject(admin, profileId, parseEditPayload(body)),
@@ -363,7 +417,7 @@ export async function handleProjectsPost(
         status: 400,
         json: {
           error:
-            '"action" must be "sync", "star", "update", "initiate", "edit-project", "closeout", or "overview-view"',
+            '"action" must be "sync", "star", "update", "initiate", "edit-project", "closeout", "overview-view", or a "procurement-*" action',
         },
       }
   }
